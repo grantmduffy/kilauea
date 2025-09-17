@@ -292,17 +292,19 @@ class Drawable:
         )
 
         viewport_state_ci = vk.VkPipelineViewportStateCreateInfo(
+            sType=vk.VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO,
             viewportCount=1,
-            pViewports=self.app.viewport,
+            pViewports=[self.app.viewport],
             scissorCount=1,
-            pScissors=vk.VkRect2D(
+            pScissors=[vk.VkRect2D(
                 offset=[0, 0],
                 extent=self.app.extent
-            )
+            )]
         )
 
         # TODO: make some of this configurable
         rasterizer_ci = vk.VkPipelineRasterizationStateCreateInfo(
+            sType=vk.VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO,
             depthClampEnable=vk.VK_FALSE,
             rasterizerDiscardEnable=vk.VK_FALSE,
             polygonMode=vk.VK_POLYGON_MODE_FILL,
@@ -312,18 +314,20 @@ class Drawable:
         )
 
         multisampling_ci = vk.VkPipelineMultisampleStateCreateInfo(
+            sType=vk.VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO,
             sampleShadingEnable=vk.VK_FALSE,
             rasterizationSamples=vk.VK_SAMPLE_COUNT_1_BIT
         )
 
         # TODO: also make some of this configurable
         color_blend_ci = vk.VkPipelineColorBlendStateCreateInfo(
+            sType=vk.VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO,
             logicOpEnable=vk.VK_FALSE,
             attachmentCount=1,
-            pAttachments=vk.VkPipelineColorBlendAttachmentState(
+            pAttachments=[vk.VkPipelineColorBlendAttachmentState(
                 colorWriteMask=vk.VK_COLOR_COMPONENT_R_BIT | vk.VK_COLOR_COMPONENT_G_BIT | vk.VK_COLOR_COMPONENT_B_BIT | vk.VK_COLOR_COMPONENT_A_BIT,
                 blendEnable=vk.VK_FALSE
-            ),
+            )],
             blendConstants=[0.0, 0.0, 0.0, 0.0]
         )
 
@@ -369,30 +373,30 @@ class Drawable:
         print(f"Render pass: {self.render_pass.render_pass}")
         
         try:
+            print("Creating pipeline directly...")
             pipeline_result = vk.vkCreateGraphicsPipelines(
                 self.app.device, vk.VK_NULL_HANDLE, 1, 
                 pipeline_create_info, None
             )
+            
             print(f"Pipeline result: {pipeline_result}")
             print(f"Pipeline result type: {type(pipeline_result)}")
             
-            # Handle CFFI array result
-            try:
+            # Extract pipeline from result
+            if hasattr(pipeline_result, '__len__') and len(pipeline_result) > 0:
                 self.pipeline = pipeline_result[0]
-                print(f"Pipeline extracted: {self.pipeline}")
-                if self.pipeline is None or str(self.pipeline) == 'NULL':
-                    print("ERROR: Pipeline creation returned NULL")
-                    print("This usually indicates:")
-                    print("1. Shader compilation issues")
-                    print("2. Incompatible vertex input layout")
-                    print("3. Render pass compatibility issues")
-                    print("4. Descriptor set layout issues")
-                    self.pipeline = None
-                else:
-                    print(f"Pipeline created successfully: {self.pipeline}")
-            except (IndexError, TypeError) as e:
-                print(f"Failed to extract pipeline from result: {e}")
+            else:
+                self.pipeline = pipeline_result
+                
+            print(f"Pipeline extracted: {self.pipeline}")
+            
+            # Simple validation - check if it's NULL
+            if str(self.pipeline).find('NULL') != -1:
+                print("ERROR: Pipeline creation returned NULL")
                 self.pipeline = None
+            else:
+                print(f"Pipeline created successfully: {self.pipeline}")
+                
         except Exception as e:
             print(f"Pipeline creation failed with exception: {e}")
             import traceback
@@ -400,6 +404,10 @@ class Drawable:
             self.pipeline = None
     
     def draw(self, command_buffer, image, frame_index=None):
+        if self.pipeline is None:
+            print("WARNING: Skipping draw - pipeline is NULL")
+            return
+            
         vk.vkCmdBindPipeline(command_buffer.command_buffer, vk.VK_PIPELINE_BIND_POINT_GRAPHICS, self.pipeline)
         
         # Bind descriptor sets if uniforms are available
@@ -810,6 +818,8 @@ class Uniform:
             return 64  # mat3 aligns to 64 bytes (treated as 3 vec4s)
         elif self.glsl_type in ['vec3', 'ivec3']:
             return 16  # vec3 aligns to 16 bytes
+        elif self.glsl_type == 'float':
+            return 4  # float is 4 bytes
         else:
             # For other types, align to next multiple of base alignment
             base_size = self.np_size
@@ -820,6 +830,14 @@ class Uniform:
         """Get alignment requirement for the data type"""
         if self.data is None:
             return 4
+        
+        # GLSL std140 alignment rules
+        if self.glsl_type == 'mat4':
+            return 16  # mat4 columns align to 16 bytes
+        elif self.glsl_type == 'float':
+            return 4   # float aligns to 4 bytes
+        elif self.glsl_type in ['vec3', 'ivec3']:
+            return 16  # vec3 aligns to 16 bytes
         
         dtype = self.data.dtype.type
         return self.ALIGNMENT_MAP.get(dtype, 4)
@@ -943,7 +961,7 @@ class UniformBuffer:
                 dstArrayElement=0,
                 descriptorType=vk.VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
                 descriptorCount=1,
-                pBufferInfo=buffer_info
+                pBufferInfo=[buffer_info]
             )
             
             vk.vkUpdateDescriptorSets(
@@ -965,17 +983,19 @@ class UniformBuffer:
         if self.vk_buffer is not None:
             raise RuntimeError("Buffer already created")
         
-        # Calculate total buffer size with proper alignment
-        uniform_alignment = self._get_uniform_buffer_alignment()
+        # Calculate total buffer size with proper GLSL std140 alignment
         offset = 0
         
         for name, uniform in self.uniforms.items():
-            # Align offset to uniform buffer requirements
-            offset = self._calculate_aligned_offset(offset, uniform_alignment)
+            # Align offset to the uniform's specific alignment requirement (std140 rules)
+            alignment = uniform._get_alignment()
+            offset = self._calculate_aligned_offset(offset, alignment)
             uniform.offset = offset
             offset += uniform.vk_size
         
-        self.total_size = offset
+        # Ensure the total buffer size meets minimum uniform buffer alignment
+        uniform_buffer_alignment = self._get_uniform_buffer_alignment()
+        self.total_size = self._calculate_aligned_offset(offset, uniform_buffer_alignment)
         
         # Create the Vulkan buffer
         self.vk_buffer = vk.vkCreateBuffer(
@@ -1063,6 +1083,7 @@ class MyApp(App):
         self.uniforms.make_buffer()
         
         self.pass1 = Pass(self)
+        # Now test with uniform shader
         self.mesh1 = Drawable(
             self, triangle, 
             './glsl/triangle.vert', './glsl/triangle.frag', 
@@ -1076,7 +1097,9 @@ class MyApp(App):
 
     def draw(self, command_buffer, swapchain_image):
         with self.pass1.start(command_buffer, swapchain_image):
-            self.mesh1.draw(command_buffer, swapchain_image, self.current_frame)
+            # Ensure current_frame is valid (starts at -1, so use 0 for first frame)
+            frame_index = max(0, self.current_frame)
+            self.mesh1.draw(command_buffer, swapchain_image, frame_index)
 
     def main_loop(self):
         # handle user input, update uniforms, etc.
