@@ -25,38 +25,38 @@ class CommandBuffer:
     @staticmethod
     def make_command_buffers(app, n):
         return [CommandBuffer(x) for x in vk.vkAllocateCommandBuffers(
-            app.device, vk.VkCommandBufferAllocateInfo(
-                commandPool=app.command_pool,
+            app._vk_device, vk.VkCommandBufferAllocateInfo(
+                commandPool=app._vk_command_pool,
                 level=getattr(vk, f'VK_COMMAND_BUFFER_LEVEL_PRIMARY'),
                 commandBufferCount=n
             )
         )]
 
     def __init__(self, command_buffer):
-        self.command_buffer = command_buffer
+        self._vk_command_buffer = command_buffer
 
     def __enter__(self):
         info = vk.VkCommandBufferBeginInfo(
             sType=vk.VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
             flags=vk.VK_COMMAND_BUFFER_USAGE_SIMULTANEOUS_USE_BIT
         )
-        vk.vkBeginCommandBuffer(self.command_buffer, info)
+        vk.vkBeginCommandBuffer(self._vk_command_buffer, info)
 
     def __exit__(self, exc_type, exc_value, traceback):
-        vk.vkEndCommandBuffer(self.command_buffer)
+        vk.vkEndCommandBuffer(self._vk_command_buffer)
 
 
 class Swapchain:
 
-    def __init__(self, parent, n_images):
+    def __init__(self, parent, n_images, composite_alpha='opaque'):
         self.n_images = n_images
         self.current_image = -1
-        self.swapchain = None
+        self._vk_swapchain = None
         self.parent = parent
 
         supported_present_modes = vk.vkGetInstanceProcAddr(
-            self.parent.instance, 'vkGetPhysicalDeviceSurfacePresentModesKHR'
-        )(self.parent.physical_device, self.parent.surface)
+            self.parent._vk_instance, 'vkGetPhysicalDeviceSurfacePresentModesKHR'
+        )(self.parent._vk_physical_device, self.parent._vk_surface)
         if vk.VK_PRESENT_MODE_IMMEDIATE_KHR in supported_present_modes:
             self.present_mode = vk.VK_PRESENT_MODE_IMMEDIATE_KHR
         elif vk.VK_PRESENT_MODE_MAILBOX_KHR in supported_present_modes:
@@ -71,19 +71,19 @@ class Swapchain:
             image_sharing_mode = vk.VK_SHARING_MODE_CONCURRENT
             queue_family_index_count = 2
             queue_family_indices = [self.parent.graphics_queue_family_i, self.parent.present_queue_family_i]
-        self.swapchain = vk.vkGetDeviceProcAddr(self.parent.device, 'vkCreateSwapchainKHR')(self.parent.device, vk.VkSwapchainCreateInfoKHR(
-            surface=self.parent.surface,
+        self._vk_swapchain = vk.vkGetDeviceProcAddr(self.parent._vk_device, 'vkCreateSwapchainKHR')(self.parent._vk_device, vk.VkSwapchainCreateInfoKHR(
+            surface=self.parent._vk_surface,
             minImageCount=self.n_images,
             imageFormat=self.parent.surface_format,
             imageColorSpace=self.parent.color_space,
-            imageExtent=self.parent.extent,
+            imageExtent=self.parent._vk_extent,
             imageArrayLayers=1,
             imageUsage=vk.VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT, 
             imageSharingMode=image_sharing_mode,
             queueFamilyIndexCount=queue_family_index_count,
             pQueueFamilyIndices=queue_family_indices,
             preTransform=self.parent.supported_surface_capabilities.currentTransform,
-            compositeAlpha=vk.VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR,
+            compositeAlpha=getattr(vk, f'VK_COMPOSITE_ALPHA_{composite_alpha.upper()}_BIT_KHR'),
             presentMode=self.present_mode,
             clipped=vk.VK_TRUE
         ), None)
@@ -94,34 +94,33 @@ class Swapchain:
         self.images = [
             Image(self.parent, x, self.swapchain_render_pass) 
             for x in vk.vkGetDeviceProcAddr(
-                self.parent.device, 'vkGetSwapchainImagesKHR'
-            )(self.parent.device, self.swapchain)
+                self.parent._vk_device, 'vkGetSwapchainImagesKHR'
+            )(self.parent._vk_device, self._vk_swapchain)
         ]
         
     def get_next_image(self, frame, timeout=1000000000):
-        self.current_image = vk.vkGetDeviceProcAddr(self.parent.device, 'vkAcquireNextImageKHR')(
-            self.parent.device, swapchain=self.swapchain, timeout=timeout,
-            semaphore=frame.image_available_semaphore.semaphore, fence=vk.VK_NULL_HANDLE
+        self.current_image = vk.vkGetDeviceProcAddr(self.parent._vk_device, 'vkAcquireNextImageKHR')(
+            self.parent._vk_device, swapchain=self._vk_swapchain, timeout=timeout,
+            semaphore=frame.image_available_semaphore._vk_semaphore, fence=vk.VK_NULL_HANDLE
         )
-        # self.current_image = (self.current_image + 1) % self.n_images
         return self.current_image, self.command_buffers[self.current_image]
 
     def present_image(self, image_i, signal_semaphore):
-        vk.vkGetDeviceProcAddr(self.parent.device, 'vkQueuePresentKHR')(
-            self.parent.queue, vk.VkPresentInfoKHR(
-                waitSemaphoreCount=1, pWaitSemaphores=[signal_semaphore.semaphore],
-                swapchainCount=1, pSwapchains=[self.swapchain],
+        vk.vkGetDeviceProcAddr(self.parent._vk_device, 'vkQueuePresentKHR')(
+            self.parent._vk_queue, vk.VkPresentInfoKHR(
+                waitSemaphoreCount=1, pWaitSemaphores=[signal_semaphore._vk_semaphore],
+                swapchainCount=1, pSwapchains=[self._vk_swapchain],
                 pImageIndices=[image_i]
             )
         )
 
     def get_images(self):
-        return zip(range(self.n_images), self.images, self.command_buffers)
+        return zip(self.images, self.command_buffers)
 
 
 class Semaphore:
     def __init__(self, app):
-        self.semaphore = vk.vkCreateSemaphore(app.device, vk.VkSemaphoreCreateInfo(), None)
+        self._vk_semaphore = vk.vkCreateSemaphore(app._vk_device, vk.VkSemaphoreCreateInfo(), None)
 
 
 class Fence:
@@ -129,31 +128,31 @@ class Fence:
     def __init__(self, app, timeout=1000000000):
         self.app = app
         self.timeout = timeout
-        self.fence = vk.vkCreateFence(
-            self.app.device, vk.VkFenceCreateInfo(flags=vk.VK_FENCE_CREATE_SIGNALED_BIT), None
+        self._vk_fence = vk.vkCreateFence(
+            self.app._vk_device, vk.VkFenceCreateInfo(flags=vk.VK_FENCE_CREATE_SIGNALED_BIT), None
         )
     
     def wait(self):
         vk.vkWaitForFences(
-            self.app.device, 
+            self.app._vk_device, 
             fenceCount=1, 
-            pFences=[self.fence], 
+            pFences=[self._vk_fence], 
             waitAll=vk.VK_TRUE, 
             timeout=self.timeout
         )
 
     def reset(self):
-        vk.vkResetFences(self.app.device, fenceCount=1, pFences=[self.fence])
+        vk.vkResetFences(self.app._vk_device, fenceCount=1, pFences=[self._vk_fence])
 
 
 class Buffer:
 
-    def __init__(self, app, data: np.ndarray=None, usage=vk.VK_BUFFER_USAGE_VERTEX_BUFFER_BIT):
+    def __init__(self, app, data: np.ndarray=None, usage='vertex'):
         self.app = app
         self.data = data
-        self.usage = usage
-        self.buffer = vk.vkCreateBuffer(
-            self.app.device,
+        self.usage = getattr(vk, f'VK_BUFFER_USAGE_{usage.upper()}_BUFFER_BIT')
+        self._vk_buffer = vk.vkCreateBuffer(
+            self.app._vk_device,
             vk.VkBufferCreateInfo(
                 size=self.data.nbytes,
                 usage=self.usage,
@@ -161,26 +160,26 @@ class Buffer:
             ),
             None
         )
-        self.memory_req = vk.vkGetBufferMemoryRequirements(self.app.device, self.buffer)
+        self.memory_req = vk.vkGetBufferMemoryRequirements(self.app._vk_device, self._vk_buffer)
         self.memory_type_index = self.app.get_memory_type_index(
             self.memory_req.memoryTypeBits,
             vk.VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | vk.VK_MEMORY_PROPERTY_HOST_COHERENT_BIT
         )
-        self.memory = vk.vkAllocateMemory(
-            self.app.device,
+        self._vk_memory = vk.vkAllocateMemory(
+            self.app._vk_device,
             vk.VkMemoryAllocateInfo(
                 allocationSize=self.memory_req.size,
                 memoryTypeIndex=self.memory_type_index
             ),
             None
         )
-        vk.vkBindBufferMemory(self.app.device, self.buffer, self.memory, 0)
+        vk.vkBindBufferMemory(self.app._vk_device, self._vk_buffer, self._vk_memory, 0)
         self.write(self.data)
 
     def write(self, data):
-        mem_ptr = vk.vkMapMemory(self.app.device, self.memory, 0, self.memory_req.size, 0)
+        mem_ptr = vk.vkMapMemory(self.app._vk_device, self._vk_memory, 0, self.memory_req.size, 0)
         vk.ffi.memmove(mem_ptr, data.tobytes(), data.nbytes)
-        vk.vkUnmapMemory(self.app.device, self.memory)
+        vk.vkUnmapMemory(self.app._vk_device, self._vk_memory)
 
 
 class Shader:
@@ -191,18 +190,18 @@ class Shader:
         self.stage_name = stage_name
         self.code = Path(source).read_text()
         self.spirv = self.compile()
-        self.module = vk.vkCreateShaderModule(
-            self.app.device,
+        self._vk_module = vk.vkCreateShaderModule(
+            self.app._vk_device,
             vk.VkShaderModuleCreateInfo(
                 codeSize=len(self.spirv) * 4,
                 pCode=self.spirv.tobytes()
             ),
             None
         )
-        self.stage = vk.VkPipelineShaderStageCreateInfo(
+        self._vk_stage = vk.VkPipelineShaderStageCreateInfo(
             sType=vk.VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
             stage=getattr(vk, f'VK_SHADER_STAGE_{self.stage_name.upper()}_BIT'),
-            module=self.module, pName='main'
+            module=self._vk_module, pName='main'
         )
 
     def compile(self):
@@ -294,11 +293,11 @@ class Drawable:
         viewport_state_ci = vk.VkPipelineViewportStateCreateInfo(
             sType=vk.VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO,
             viewportCount=1,
-            pViewports=[self.app.viewport],
+            pViewports=[self.app._vk_viewport],
             scissorCount=1,
             pScissors=[vk.VkRect2D(
                 offset=[0, 0],
-                extent=self.app.extent
+                extent=self.app._vk_extent
             )]
         )
 
@@ -337,7 +336,7 @@ class Drawable:
             descriptor_set_layouts.append(self.uniforms.descriptor_set_layout)
         
         self.pipeline_layout = vk.vkCreatePipelineLayout(
-            self.app.device, 
+            self.app._vk_device, 
             vk.VkPipelineLayoutCreateInfo(
                 sType=vk.VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
                 setLayoutCount=len(descriptor_set_layouts),
@@ -345,7 +344,7 @@ class Drawable:
             ), None
         )
 
-        shader_stages = [self.vertex_shader.stage, self.fragment_shader.stage]
+        shader_stages = [self.vertex_shader._vk_stage, self.fragment_shader._vk_stage]
         print(f"Creating pipeline with {len(descriptor_set_layouts)} descriptor set layouts")
         print(f"Pipeline layout: {self.pipeline_layout}")
         
@@ -362,20 +361,20 @@ class Drawable:
             pDepthStencilState=None,
             pColorBlendState=color_blend_ci,
             layout=self.pipeline_layout,
-            renderPass=self.render_pass.render_pass,
+            renderPass=self.render_pass._vk_render_pass,
             subpass=0
         )
         
         print("About to create graphics pipeline...")
         print(f"Shader stages: {len(shader_stages)}")
-        print(f"Vertex shader module: {self.vertex_shader.module}")
-        print(f"Fragment shader module: {self.fragment_shader.module}")
-        print(f"Render pass: {self.render_pass.render_pass}")
+        print(f"Vertex shader module: {self.vertex_shader._vk_module}")
+        print(f"Fragment shader module: {self.fragment_shader._vk_module}")
+        print(f"Render pass: {self.render_pass._vk_render_pass}")
         
         try:
             print("Creating pipeline directly...")
             pipeline_result = vk.vkCreateGraphicsPipelines(
-                self.app.device, vk.VK_NULL_HANDLE, 1, 
+                self.app._vk_device, vk.VK_NULL_HANDLE, 1, 
                 pipeline_create_info, None
             )
             
@@ -403,17 +402,14 @@ class Drawable:
             traceback.print_exc()
             self.pipeline = None
     
-    def draw(self, command_buffer, image, frame_index=None):
-        if self.pipeline is None:
-            print("WARNING: Skipping draw - pipeline is NULL")
-            return
+    def draw(self, command_buffer, frame_index=None):
             
-        vk.vkCmdBindPipeline(command_buffer.command_buffer, vk.VK_PIPELINE_BIND_POINT_GRAPHICS, self.pipeline)
+        vk.vkCmdBindPipeline(command_buffer._vk_command_buffer, vk.VK_PIPELINE_BIND_POINT_GRAPHICS, self.pipeline)
         
         # Bind descriptor sets if uniforms are available
         if self.uniforms and frame_index is not None:
             vk.vkCmdBindDescriptorSets(
-                command_buffer.command_buffer,
+                command_buffer._vk_command_buffer,
                 vk.VK_PIPELINE_BIND_POINT_GRAPHICS,
                 self.pipeline_layout,
                 0,  # firstSet
@@ -423,8 +419,8 @@ class Drawable:
                 None  # pDynamicOffsets
             )
         
-        vk.vkCmdBindVertexBuffers(command_buffer.command_buffer, 0, 1, [self.vertices.buffer], [0])
-        vk.vkCmdDraw(command_buffer.command_buffer, len(self.vertices.data), 1, 0, 0)
+        vk.vkCmdBindVertexBuffers(command_buffer._vk_command_buffer, 0, 1, [self.vertices._vk_buffer], [0])
+        vk.vkCmdDraw(command_buffer._vk_command_buffer, len(self.vertices.data), 1, 0, 0)
 
 
 class Pass:
@@ -453,8 +449,8 @@ class Pass:
             colorAttachmentCount=1,
             pColorAttachments=color_attachment_ref
         )
-        self.render_pass = vk.vkCreateRenderPass(
-            self.app.device, 
+        self._vk_render_pass = vk.vkCreateRenderPass(
+            self.app._vk_device, 
             vk.VkRenderPassCreateInfo(
                 attachmentCount=1,
                 pAttachments=color_attachment,
@@ -462,7 +458,7 @@ class Pass:
                 pSubpasses=subpass
             ), None
         )
-        self.clear_value = vk.VkClearValue(vk.VkClearColorValue(self.clear_color))
+        self._vk_clear_value = vk.VkClearValue(vk.VkClearColorValue(self.clear_color))
 
     def start(self, command_buffer, target_image):
         return PassContext(self, command_buffer, target_image)
@@ -477,16 +473,16 @@ class PassContext:
 
     def __enter__(self):
         vk.vkCmdBeginRenderPass(
-            self.command_buffer.command_buffer, vk.VkRenderPassBeginInfo(
-                renderPass=self.render_pass.render_pass, framebuffer=self.target_image.framebuffer, 
-                renderArea=vk.VkRect2D(offset=[0, 0], extent=self.render_pass.app.extent), 
-                clearValueCount=1, pClearValues=self.render_pass.clear_value
+            self.command_buffer._vk_command_buffer, vk.VkRenderPassBeginInfo(
+                renderPass=self.render_pass._vk_render_pass, framebuffer=self.target_image._vk_framebuffer, 
+                renderArea=vk.VkRect2D(offset=[0, 0], extent=self.render_pass.app._vk_extent), 
+                clearValueCount=1, pClearValues=self.render_pass._vk_clear_value
             ),
             getattr(vk, f'VK_SUBPASS_CONTENTS_INLINE')
         )
 
     def __exit__(self, *args):
-        vk.vkCmdEndRenderPass(self.command_buffer.command_buffer)
+        vk.vkCmdEndRenderPass(self.command_buffer._vk_command_buffer)
 
 
 class Frame:
@@ -502,13 +498,13 @@ class Image:
 
     def __init__(self, app, image, render_pass):
         self.app = app
-        self.image = image
+        self._vk_image = image
         self.render_pass = render_pass
 
-        self.image_view = vk.vkCreateImageView(
-            device=self.app.device,
+        self._vk_image_view = vk.vkCreateImageView(
+            device=self.app._vk_device,
             pCreateInfo=vk.VkImageViewCreateInfo(
-                image=self.image,
+                image=self._vk_image,
                 viewType=vk.VK_IMAGE_VIEW_TYPE_2D,
                 format=self.app.surface_format,
                 subresourceRange=vk.VkImageSubresourceRange(
@@ -519,14 +515,14 @@ class Image:
             ),
             pAllocator=None
         )
-        self.framebuffer = vk.vkCreateFramebuffer(
-            self.app.device, 
+        self._vk_framebuffer = vk.vkCreateFramebuffer(
+            self.app._vk_device, 
             vk.VkFramebufferCreateInfo(
-                renderPass=self.render_pass.render_pass,
+                renderPass=self.render_pass._vk_render_pass,
                 attachmentCount=1,
-                pAttachments=[self.image_view,],
-                width=self.app.extent.width,
-                height=self.app.extent.height,
+                pAttachments=[self._vk_image_view,],
+                width=self.app._vk_extent.width,
+                height=self.app._vk_extent.height,
                 layers=1
             ), None
         )
@@ -589,7 +585,7 @@ class App:
             if l not in supported_layers:
                 raise Exception(f'Layer {l} is not supported')
 
-        self.instance = vk.vkCreateInstance(
+        self._vk_instance = vk.vkCreateInstance(
             vk.VkInstanceCreateInfo(
                 pApplicationInfo=app_info,
                 enabledLayerCount=len(enabled_layers),
@@ -600,45 +596,45 @@ class App:
         )
 
         surface = vk.ffi.new('VkSurfaceKHR *')
-        glfw.create_window_surface(self.instance, self.window, None, surface)
-        self.surface = surface[0]
+        glfw.create_window_surface(self._vk_instance, self.window, None, surface)
+        self._vk_surface = surface[0]
 
-        creation_function = vk.vkGetInstanceProcAddr(self.instance, 'vkCreateDebugReportCallbackEXT')
-        self.debug_messenger = creation_function(self.instance, vk.VkDebugReportCallbackCreateInfoEXT(
+        creation_function = vk.vkGetInstanceProcAddr(self._vk_instance, 'vkCreateDebugReportCallbackEXT')
+        self._vk_debug_messenger = creation_function(self._vk_instance, vk.VkDebugReportCallbackCreateInfoEXT(
             flags = vk.VK_DEBUG_REPORT_ERROR_BIT_EXT | vk.VK_DEBUG_REPORT_WARNING_BIT_EXT,
             pfnCallback=self.debug_callback
         ), None)
 
-        available_devices = vk.vkEnumeratePhysicalDevices(self.instance)
+        available_devices = vk.vkEnumeratePhysicalDevices(self._vk_instance)
         possible_types = ['cpu', 'discrete_gpu', 'integrated_gpu', 'virtual_gpu']
         possible_types = {x: getattr(vk, f'VK_PHYSICAL_DEVICE_TYPE_{x.upper()}') for x in possible_types}
-        self.physical_device = None
+        self._vk_physical_device = None
         for device_type in self.device_preference:
             for d in available_devices:
                 if vk.vkGetPhysicalDeviceProperties(d).deviceType == possible_types[device_type]:
-                    self.physical_device = d
+                    self._vk_physical_device = d
                     break
-            if self.physical_device is not None:
+            if self._vk_physical_device is not None:
                 break
-        if self.physical_device is None:
+        if self._vk_physical_device is None:
             raise Exception('No suitable device found')
         
         w, h = glfw.get_framebuffer_size(self.window)
         self.supported_surface_capabilities = vk.vkGetInstanceProcAddr(
-            self.instance, 'vkGetPhysicalDeviceSurfaceCapabilitiesKHR'
-        )(self.physical_device, self.surface, None)
-        self.extent = vk.VkExtent2D(
+            self._vk_instance, 'vkGetPhysicalDeviceSurfaceCapabilitiesKHR'
+        )(self._vk_physical_device, self._vk_surface, None)
+        self._vk_extent = vk.VkExtent2D(
             width=max(min(w, self.supported_surface_capabilities.maxImageExtent.width), self.supported_surface_capabilities.minImageExtent.width), 
             height=max(min(h, self.supported_surface_capabilities.maxImageExtent.height), self.supported_surface_capabilities.minImageExtent.height)
         )
 
-        queue_families = vk.vkGetPhysicalDeviceQueueFamilyProperties(self.physical_device)
+        queue_families = vk.vkGetPhysicalDeviceQueueFamilyProperties(self._vk_physical_device)
         self.graphics_queue_family_i = None
         self.present_queue_family_i = None
         for i, q in enumerate(queue_families):
             if self.graphics_queue_family_i is None and q.queueFlags & vk.VK_QUEUE_GRAPHICS_BIT:
                 self.graphics_queue_family_i = i
-            if self.present_queue_family_i is None and vk.vkGetInstanceProcAddr(self.instance, 'vkGetPhysicalDeviceSurfaceSupportKHR')(self.physical_device, i, self.surface):
+            if self.present_queue_family_i is None and vk.vkGetInstanceProcAddr(self._vk_instance, 'vkGetPhysicalDeviceSurfaceSupportKHR')(self._vk_physical_device, i, self._vk_surface):
                 self.present_queue_family_i = i
         unique_queue_i = list({
             self.graphics_queue_family_i, 
@@ -653,8 +649,8 @@ class App:
             vk.VK_KHR_SWAPCHAIN_EXTENSION_NAME
         ]
 
-        self.device = vk.vkCreateDevice(
-            self.physical_device, 
+        self._vk_device = vk.vkCreateDevice(
+            self._vk_physical_device, 
             [vk.VkDeviceCreateInfo(
                 queueCreateInfoCount = len(queue_create_info),
                 pQueueCreateInfos = queue_create_info,
@@ -667,21 +663,21 @@ class App:
             None
         )
 
-        self.queue = vk.vkGetDeviceQueue(self.device, self.graphics_queue_family_i, 0)
-        self.command_pool = vk.vkCreateCommandPool(
-            self.device, vk.VkCommandPoolCreateInfo(
+        self._vk_queue = vk.vkGetDeviceQueue(self._vk_device, self.graphics_queue_family_i, 0)
+        self._vk_command_pool = vk.vkCreateCommandPool(
+            self._vk_device, vk.VkCommandPoolCreateInfo(
                 queueFamilyIndex=self.graphics_queue_family_i,
                 flags=vk.VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT
             ), None
         )
 
-        self.viewport = vk.VkViewport(
-            x=0, y=0, width=self.extent.width, height=self.extent.height,
+        self._vk_viewport = vk.VkViewport(
+            x=0, y=0, width=self._vk_extent.width, height=self._vk_extent.height,
             minDepth=0.0, maxDepth=1.0
         )
 
     def get_memory_type_index(self, type_bits, properties):
-        mem_props = vk.vkGetPhysicalDeviceMemoryProperties(self.physical_device)
+        mem_props = vk.vkGetPhysicalDeviceMemoryProperties(self._vk_physical_device)
         for i in range(mem_props.memoryTypeCount):
             if (type_bits & (1 << i)) and ((mem_props.memoryTypes[i].propertyFlags & properties) == properties):
                 return i
@@ -696,8 +692,8 @@ class App:
             )
         ]
         
-        self.descriptor_pool = vk.vkCreateDescriptorPool(
-            self.device,
+        self._vk_descriptor_pool = vk.vkCreateDescriptorPool(
+            self._vk_device,
             vk.VkDescriptorPoolCreateInfo(
                 sType=vk.VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
                 flags=vk.VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT,
@@ -707,8 +703,7 @@ class App:
             ),
             None
         )
-        return self.descriptor_pool
-
+        return self._vk_descriptor_pool
 
     @staticmethod
     def debug_callback(*args):
@@ -728,7 +723,7 @@ class App:
         pass
 
     def record_draw_commands(self):
-        for image_i, image, command_buffer in self.swapchain.get_images():
+        for image, command_buffer in self.swapchain.get_images():
             with command_buffer:
                 self.draw(command_buffer, image)
 
@@ -744,12 +739,12 @@ class App:
             self.frame_count += 1
     
     def submit_commands(self, command_buffer, frame):
-        vk.vkQueueSubmit(self.queue, 1, vk.VkSubmitInfo(
-                waitSemaphoreCount=1, pWaitSemaphores=[frame.image_available_semaphore.semaphore],
+        vk.vkQueueSubmit(self._vk_queue, 1, vk.VkSubmitInfo(
+                waitSemaphoreCount=1, pWaitSemaphores=[frame.image_available_semaphore._vk_semaphore],
                 pWaitDstStageMask=[vk.VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,],
-                commandBufferCount=1, pCommandBuffers=[command_buffer.command_buffer],
-                signalSemaphoreCount=1, pSignalSemaphores=[frame.render_finished_semaphore.semaphore]
-            ), fence=frame.fence.fence)
+                commandBufferCount=1, pCommandBuffers=[command_buffer._vk_command_buffer],
+                signalSemaphoreCount=1, pSignalSemaphores=[frame.render_finished_semaphore._vk_semaphore]
+            ), fence=frame.fence._vk_fence)
 
     def run(self):
 
@@ -769,6 +764,7 @@ class App:
         
         # shutdown
         self.graphics_thread.join()
+        self.destroy()
     
     def destroy(self):
         glfw.terminate()
@@ -875,14 +871,14 @@ class UniformBuffer:
     def __init__(self, app, data=None):
         self.app = app
         self.uniforms = {}
-        self.vk_buffer = None  # Vulkan buffer object
-        self.vk_memory = None  # Vulkan memory object
+        self._vk_buffer = None  # Vulkan buffer object
+        self._vk_memory = None  # Vulkan memory object
         self.mapped_memory = None  # Persistently mapped memory pointer
         self.total_size = 0
         self.min_uniform_buffer_offset_alignment = None
     
     def __setitem__(self, uniform_name, uniform):
-        if self.vk_buffer is not None:
+        if self._vk_buffer is not None:
             raise RuntimeError("Cannot add uniforms after buffer has been created")
         self.uniforms[uniform_name] = uniform
     
@@ -890,14 +886,14 @@ class UniformBuffer:
         return self.uniforms[uniform_name]
     
     def add_uniform(self, name, *args, **kwargs):
-        if self.vk_buffer is not None:
+        if self._vk_buffer is not None:
             raise RuntimeError("Cannot add uniforms after buffer has been created")
         self.uniforms[name] = Uniform(*args, **kwargs)
     
     def _get_uniform_buffer_alignment(self):
         """Get the minimum uniform buffer offset alignment from device properties"""
         if self.min_uniform_buffer_offset_alignment is None:
-            device_props = vk.vkGetPhysicalDeviceProperties(self.app.physical_device)
+            device_props = vk.vkGetPhysicalDeviceProperties(self.app._vk_physical_device)
             self.min_uniform_buffer_offset_alignment = device_props.limits.minUniformBufferOffsetAlignment
         return self.min_uniform_buffer_offset_alignment
     
@@ -912,13 +908,14 @@ class UniformBuffer:
                 binding=0,
                 descriptorType=vk.VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
                 descriptorCount=1,
-                stageFlags=vk.VK_SHADER_STAGE_VERTEX_BIT | vk.VK_SHADER_STAGE_FRAGMENT_BIT,
+                # TODO: automatically determine stages
+                stageFlags=vk.VK_SHADER_STAGE_VERTEX_BIT | vk.VK_SHADER_STAGE_FRAGMENT_BIT, 
                 pImmutableSamplers=None
             )
         ]
         
         self.descriptor_set_layout = vk.vkCreateDescriptorSetLayout(
-            self.app.device,
+            self.app._vk_device,
             vk.VkDescriptorSetLayoutCreateInfo(
                 sType=vk.VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
                 bindingCount=len(bindings),
@@ -928,28 +925,25 @@ class UniformBuffer:
         )
         return self.descriptor_set_layout
     
-    def create_descriptor_sets(self, descriptor_pool):
+    def create_descriptor_set(self, descriptor_pool):
         """Create descriptor sets for each frame in flight"""
         if not hasattr(self, 'descriptor_set_layout'):
             raise RuntimeError("Must create descriptor set layout first")
         
-        n_frames = len(self.app.frames)
-        layouts = [self.descriptor_set_layout] * n_frames
-        
         self.descriptor_sets = vk.vkAllocateDescriptorSets(
-            self.app.device,
+            self.app._vk_device,
             vk.VkDescriptorSetAllocateInfo(
                 sType=vk.VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
                 descriptorPool=descriptor_pool,
-                descriptorSetCount=n_frames,
-                pSetLayouts=layouts
+                descriptorSetCount=1,
+                pSetLayouts=[self.descriptor_set_layout]
             )
         )
         
         # Update descriptor sets to point to our uniform buffer
         for i, descriptor_set in enumerate(self.descriptor_sets):
             buffer_info = vk.VkDescriptorBufferInfo(
-                buffer=self.vk_buffer,
+                buffer=self._vk_buffer,
                 offset=0,
                 range=self.total_size
             )
@@ -965,7 +959,7 @@ class UniformBuffer:
             )
             
             vk.vkUpdateDescriptorSets(
-                self.app.device,
+                self.app._vk_device,
                 descriptorWriteCount=1,
                 pDescriptorWrites=[write_descriptor_set],
                 descriptorCopyCount=0,
@@ -980,7 +974,7 @@ class UniformBuffer:
         if not self.uniforms:
             raise RuntimeError("No uniforms added to buffer")
         
-        if self.vk_buffer is not None:
+        if self._vk_buffer is not None:
             raise RuntimeError("Buffer already created")
         
         # Calculate total buffer size with proper GLSL std140 alignment
@@ -998,8 +992,8 @@ class UniformBuffer:
         self.total_size = self._calculate_aligned_offset(offset, uniform_buffer_alignment)
         
         # Create the Vulkan buffer
-        self.vk_buffer = vk.vkCreateBuffer(
-            self.app.device,
+        self._vk_buffer = vk.vkCreateBuffer(
+            self.app._vk_device,
             vk.VkBufferCreateInfo(
                 size=self.total_size,
                 usage=vk.VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
@@ -1009,14 +1003,14 @@ class UniformBuffer:
         )
         
         # Allocate memory for the buffer
-        memory_req = vk.vkGetBufferMemoryRequirements(self.app.device, self.vk_buffer)
+        memory_req = vk.vkGetBufferMemoryRequirements(self.app._vk_device, self._vk_buffer)
         memory_type_index = self.app.get_memory_type_index(
             memory_req.memoryTypeBits,
             vk.VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | vk.VK_MEMORY_PROPERTY_HOST_COHERENT_BIT
         )
         
-        self.vk_memory = vk.vkAllocateMemory(
-            self.app.device,
+        self._vk_memory = vk.vkAllocateMemory(
+            self.app._vk_device,
             vk.VkMemoryAllocateInfo(
                 allocationSize=memory_req.size,
                 memoryTypeIndex=memory_type_index
@@ -1025,15 +1019,13 @@ class UniformBuffer:
         )
         
         # Bind buffer to memory
-        vk.vkBindBufferMemory(self.app.device, self.vk_buffer, self.vk_memory, 0)
+        vk.vkBindBufferMemory(self.app._vk_device, self._vk_buffer, self._vk_memory, 0)
         
         # Map memory persistently
         self.mapped_memory = vk.vkMapMemory(
-            self.app.device, 
-            self.vk_memory, 
-            0, 
-            memory_req.size, 
-            0
+            self.app._vk_device, 
+            self._vk_memory, 0, 
+            memory_req.size, 0
         )
         
         # Create descriptor set layout first (needed for pipeline creation)
@@ -1044,7 +1036,7 @@ class UniformBuffer:
             uniform.map_to_location(self.mapped_memory, uniform.offset)
         
         # Create descriptor sets after buffer is ready
-        self.create_descriptor_sets(self.app.descriptor_pool)
+        self.create_descriptor_set(self.app._vk_descriptor_pool)
         
         print(f"UniformBuffer created: {self.total_size} bytes, {len(self.uniforms)} uniforms")
         for name, uniform in self.uniforms.items():
@@ -1053,16 +1045,16 @@ class UniformBuffer:
     def destroy(self):
         """Clean up Vulkan resources"""
         if self.mapped_memory is not None:
-            vk.vkUnmapMemory(self.app.device, self.vk_memory)
+            vk.vkUnmapMemory(self.app._vk_device, self._vk_memory)
             self.mapped_memory = None
         
-        if self.vk_memory is not None:
-            vk.vkFreeMemory(self.app.device, self.vk_memory, None)
-            self.vk_memory = None
+        if self._vk_memory is not None:
+            vk.vkFreeMemory(self.app._vk_device, self._vk_memory, None)
+            self._vk_memory = None
         
-        if self.vk_buffer is not None:
-            vk.vkDestroyBuffer(self.app.device, self.vk_buffer, None)
-            self.vk_buffer = None
+        if self._vk_buffer is not None:
+            vk.vkDestroyBuffer(self.app._vk_device, self._vk_buffer, None)
+            self._vk_buffer = None
 
 
 class MyApp(App):
@@ -1097,9 +1089,7 @@ class MyApp(App):
 
     def draw(self, command_buffer, swapchain_image):
         with self.pass1.start(command_buffer, swapchain_image):
-            # Ensure current_frame is valid (starts at -1, so use 0 for first frame)
-            frame_index = max(0, self.current_frame)
-            self.mesh1.draw(command_buffer, swapchain_image, frame_index)
+            self.mesh1.draw(command_buffer, 0)
 
     def main_loop(self):
         # handle user input, update uniforms, etc.
