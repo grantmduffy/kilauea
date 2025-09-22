@@ -12,12 +12,12 @@ class Shader:
         self.source = source
         self.stage_name = stage_name
         self.code = Path(source).read_text()
-        self.spirv = self.compile()
+        self.spirv = self.compile().tobytes()
         self._vk_module = vk.vkCreateShaderModule(
             self.app._vk_device,
             vk.VkShaderModuleCreateInfo(
-                codeSize=len(self.spirv) * 4,
-                pCode=self.spirv.tobytes()
+                codeSize=len(self.spirv),
+                pCode=self.spirv
             ),
             None
         )

@@ -12,15 +12,19 @@ class Pass:
         self.clear_color = clear_color
         self.final_layout = final_layout
 
+        # Determine load operation based on clear_color
+        load_op = vk.VK_ATTACHMENT_LOAD_OP_LOAD if clear_color is None else vk.VK_ATTACHMENT_LOAD_OP_CLEAR
+        initial_layout = vk.VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL if clear_color is None else vk.VK_IMAGE_LAYOUT_UNDEFINED
+
         # TODO: dynamically create color attachment
         color_attachment = vk.VkAttachmentDescription(
             format=self.app.surface_format,
             samples=vk.VK_SAMPLE_COUNT_1_BIT,
-            loadOp=vk.VK_ATTACHMENT_LOAD_OP_CLEAR,
+            loadOp=load_op,
             storeOp=vk.VK_ATTACHMENT_STORE_OP_STORE,
             stencilLoadOp=vk.VK_ATTACHMENT_LOAD_OP_DONT_CARE,
             stencilStoreOp=vk.VK_ATTACHMENT_STORE_OP_DONT_CARE,
-            initialLayout=vk.VK_IMAGE_LAYOUT_UNDEFINED,
+            initialLayout=initial_layout,
             finalLayout=final_layout,
         )
         color_attachment_ref = vk.VkAttachmentReference(
@@ -41,7 +45,8 @@ class Pass:
                 pSubpasses=subpass
             ), None
         )
-        self._vk_clear_value = vk.VkClearValue(vk.VkClearColorValue(self.clear_color))
+        # Only create clear value if we're actually clearing
+        self._vk_clear_value = vk.VkClearValue(vk.VkClearColorValue(self.clear_color)) if clear_color is not None else None
 
     def destroy(self):
         vk.vkDestroyRenderPass(self.app._vk_device, self._vk_render_pass, None)
@@ -58,11 +63,15 @@ class PassContext:
         self.target_image = target_image
 
     def __enter__(self):
+        # Set clear value count and pointer based on whether we're clearing
+        clear_value_count = 1 if self.render_pass._vk_clear_value is not None else 0
+        clear_values = self.render_pass._vk_clear_value if self.render_pass._vk_clear_value is not None else None
+        
         vk.vkCmdBeginRenderPass(
             self.command_buffer._vk_command_buffer, vk.VkRenderPassBeginInfo(
                 renderPass=self.render_pass._vk_render_pass, framebuffer=self.target_image._vk_framebuffer, 
                 renderArea=vk.VkRect2D(offset=[0, 0], extent=self.render_pass.app._vk_extent), 
-                clearValueCount=1, pClearValues=self.render_pass._vk_clear_value
+                clearValueCount=clear_value_count, pClearValues=clear_values
             ),
             getattr(vk, f'VK_SUBPASS_CONTENTS_INLINE')
         )
@@ -180,10 +189,8 @@ class Drawable:
         )
 
         shader_stages = [self.vertex_shader._vk_stage, self.fragment_shader._vk_stage]
-        print(f"Creating pipeline with {len(descriptor_set_layouts)} descriptor set layouts")
-        print(f"Pipeline layout: {self._vk_pipeline_layout}")
         
-        # Create pipeline - let's check if there are validation issues
+        # Create pipeline
         pipeline_create_info = vk.VkGraphicsPipelineCreateInfo(
             sType=vk.VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
             stageCount=len(shader_stages),
@@ -200,42 +207,59 @@ class Drawable:
             subpass=0
         )
         
-        print("About to create graphics pipeline...")
-        print(f"Shader stages: {len(shader_stages)}")
-        print(f"Vertex shader module: {self.vertex_shader._vk_module}")
-        print(f"Fragment shader module: {self.fragment_shader._vk_module}")
-        print(f"Render pass: {self.render_pass._vk_render_pass}")
-        
         try:
-            print("Creating pipeline directly...")
-            pipeline_result = vk.vkCreateGraphicsPipelines(
-                self.app._vk_device, vk.VK_NULL_HANDLE, 1, 
-                pipeline_create_info, None
+            pipelines = vk.vkCreateGraphicsPipelines(
+                self.app._vk_device, 
+                vk.VK_NULL_HANDLE, 
+                1, 
+                [pipeline_create_info], 
+                None
             )
             
-            print(f"Pipeline result: {pipeline_result}")
-            print(f"Pipeline result type: {type(pipeline_result)}")
-            
-            # Extract pipeline from result
-            if hasattr(pipeline_result, '__len__') and len(pipeline_result) > 0:
-                self._vk_pipeline = pipeline_result[0]
-            else:
-                self._vk_pipeline = pipeline_result
+            if pipelines and len(pipelines) > 0:
+                self._vk_pipeline = pipelines[0]
                 
-            print(f"Pipeline extracted: {self._vk_pipeline}")
-            
-            # Simple validation - check if it's NULL
-            if str(self._vk_pipeline).find('NULL') != -1:
-                print("ERROR: Pipeline creation returned NULL")
-                self._vk_pipeline = None
+                # Check if the pipeline handle is actually valid (not NULL)
+                # The issue was in the detection - let's check if pipeline is actually None or invalid
+                if not self._vk_pipeline or self._vk_pipeline == vk.VK_NULL_HANDLE:
+                    print(f"\n!!! PIPELINE CREATION RETURNED NULL - RUNNING AUTOMATIC DEBUG !!!")
+                    # Use the debug method to find out why
+                    debug_pipeline = self.app.debug_graphics_pipeline_creation(
+                        shader_stages, vs_inputs, input_assembly_ci,
+                        viewport_state_ci, rasterizer_ci, multisampling_ci,
+                        color_blend_ci, self.render_pass._vk_render_pass, self._vk_pipeline_layout
+                    )
+                    raise RuntimeError("Pipeline creation returned NULL handle - see debug output above for details")
+                else:
+                    # Pipeline creation succeeded
+                    print(f"Pipeline created successfully: {self._vk_pipeline}")
             else:
-                print(f"Pipeline created successfully: {self._vk_pipeline}")
+                print(f"\n!!! NO PIPELINES RETURNED - RUNNING AUTOMATIC DEBUG !!!")
+                # Use the debug method to find out why
+                debug_pipeline = self.app.debug_graphics_pipeline_creation(
+                    shader_stages, vs_inputs, input_assembly_ci,
+                    viewport_state_ci, rasterizer_ci, multisampling_ci,
+                    color_blend_ci, self.render_pass._vk_render_pass, self._vk_pipeline_layout
+                )
+                raise RuntimeError("No pipelines returned from vkCreateGraphicsPipelines - see debug output above for details")
                 
         except Exception as e:
-            print(f"Pipeline creation failed with exception: {e}")
-            import traceback
-            traceback.print_exc()
-            self._vk_pipeline = None
+            # If it's not one of our expected errors, also run debug
+            if "Pipeline creation returned NULL" not in str(e) and "No pipelines returned" not in str(e):
+                print(f"\n!!! PIPELINE CREATION EXCEPTION - RUNNING AUTOMATIC DEBUG !!!")
+                print(f"Original exception: {e}")
+                # Use the debug method to find out why
+                try:
+                    debug_pipeline = self.app.debug_graphics_pipeline_creation(
+                        shader_stages, vs_inputs, input_assembly_ci,
+                        viewport_state_ci, rasterizer_ci, multisampling_ci,
+                        color_blend_ci, self.render_pass._vk_render_pass, self._vk_pipeline_layout
+                    )
+                except Exception as debug_e:
+                    print(f"Debug method also failed: {debug_e}")
+            
+            print(f"Pipeline creation failed: {e}")
+            raise RuntimeError(f"Failed to create graphics pipeline: {e}")
 
     def destroy(self):
         vk.vkDestroyPipeline(self.app._vk_device, self._vk_pipeline, None)
