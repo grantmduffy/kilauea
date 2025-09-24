@@ -24,7 +24,7 @@ class MyApp(App):
         self.uniforms = UniformBuffer(self)
         self.uniforms['camera'] = Uniform(np.eye(4, dtype=np.float32), glsl_type='mat4')
         self.uniforms['time'] = Uniform(np.array([0.0], dtype=np.float32), glsl_type='float')
-        self.uniforms.make_buffer()
+        self.uniforms.create()
 
         self.pass1 = Pass(self, final_layout=vk.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL)
         self.pass2 = Pass(self)
@@ -60,35 +60,6 @@ class MyApp(App):
 
         with self.pass2.start(command_buffer, swapchain_image):
             self.blur.draw(command_buffer, 0)
-
-    def cleanup_swapchain(self):
-        self.mesh1.destroy()
-        self.blur.destroy()
-        self.deferred_texture.destroy()
-        self.deferred_image.destroy()
-        self.pass1.destroy()
-        self.pass2.destroy()
-        self.swapchain.destroy()
-
-    def create_swapchain(self):
-        # Store the old n_images value
-        old_n_images = getattr(self.swapchain, 'n_images', 4)
-        
-        self.swapchain = Swapchain(self, old_n_images)
-        self.pass1 = Pass(self, final_layout=vk.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL)
-        self.pass2 = Pass(self)
-        
-        # Recreate the deferred image with the new extent
-        self.deferred_image = Image(self, render_pass=self.pass1)
-        self.deferred_texture = Texture(self, self.deferred_image)
-        
-        # Update render passes for drawables and recreate pipelines
-        self.mesh1.render_pass = self.pass1
-        self.mesh1.create_pipeline()
-        
-        self.blur.render_pass = self.pass2
-        self.blur.textures = [self.deferred_texture]  # Update texture reference
-        self.blur.create_pipeline()
 
     def main_loop(self):
         # handle user input, update uniforms, etc.

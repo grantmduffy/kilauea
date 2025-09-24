@@ -35,12 +35,18 @@ class App:
         self.init_vk()
         self.create_descriptor_pool()  # Create descriptor pool for uniform buffers
         self.swapchain = Swapchain(self, n_images)
+        self.swapchain.create()
         self.frames = tuple(Frame(self) for _ in range(n_frames))
+        
+    def initialize_objects(self):
+        """Initialize all registered objects after user's __init__ is complete"""
+        for obj in self.swapchain.objects:
+            obj.create()
          
     def init_vk(self):
 
         self.window = glfw.create_window(*self.size, self.title, None, None)
-        # glfw.set_framebuffer_size_callback(self.window, self.framebuffer_resize_callback)
+        glfw.set_framebuffer_size_callback(self.window, self.framebuffer_resize_callback)
 
         app_info = vk.VkApplicationInfo(
             pApplicationName=self.title,
@@ -972,14 +978,13 @@ class App:
     def graphics_loop(self):
         while self.running:
             frame = self.get_next_frame()
-            
+
             try:
                 image, command_buffer = self.swapchain.get_next_image(frame)
             except (vk.VkError, vk.VkSuboptimalKhr) as e:
-                if isinstance(e, vk.VkSuboptimalKhr):
-                    self.recreate_swapchain()
-                    continue
-                elif hasattr(e, 'args') and len(e.args) > 0 and e.args[0] == vk.VK_ERROR_OUT_OF_DATE_KHR:
+                is_out_of_date = isinstance(e, vk.VkSuboptimalKhr) or \
+                                 (hasattr(e, 'args') and len(e.args) > 0 and e.args[0] == vk.VK_ERROR_OUT_OF_DATE_KHR)
+                if is_out_of_date:
                     self.recreate_swapchain()
                     continue
                 else:
@@ -987,23 +992,20 @@ class App:
 
             self.submit_commands(command_buffer, frame)
 
+            present_failed = False
             try:
                 self.swapchain.present_image(image, frame.render_finished_semaphore)
             except (vk.VkError, vk.VkSuboptimalKhr) as e:
-                should_recreate = False
-                
-                if isinstance(e, vk.VkSuboptimalKhr):
-                    should_recreate = True
-                elif hasattr(e, 'args') and len(e.args) > 0 and e.args[0] in [vk.VK_ERROR_OUT_OF_DATE_KHR, vk.VK_SUBOPTIMAL_KHR]:
-                    should_recreate = True
-                elif self.framebuffer_resized:
-                    should_recreate = True
-                
-                if should_recreate:
-                    self.framebuffer_resized = False
-                    self.recreate_swapchain()
+                is_out_of_date = isinstance(e, vk.VkSuboptimalKhr) or \
+                                 (hasattr(e, 'args') and len(e.args) > 0 and e.args[0] in [vk.VK_ERROR_OUT_OF_DATE_KHR, vk.VK_SUBOPTIMAL_KHR])
+                if is_out_of_date:
+                    present_failed = True
                 else:
                     raise e
+            
+            if present_failed or self.framebuffer_resized:
+                self.framebuffer_resized = False
+                self.recreate_swapchain()
 
             self.frame_count += 1
     
@@ -1016,6 +1018,8 @@ class App:
             ), fence=frame.fence._vk_fence)
 
     def run(self):
+        # Initialize all registered objects after user's __init__ is complete
+        self.initialize_objects()
 
         # record draw calls
         self.record_draw_commands()
@@ -1069,7 +1073,9 @@ class App:
         self.record_draw_commands()
 
     def cleanup_swapchain(self):
-        raise NotImplementedError()
+        # raise NotImplementedError()
+        self.swapchain.destroy()
 
     def create_swapchain(self):
-        raise NotImplementedError()
+        # raise NotImplementedError()
+        self.swapchain.create()

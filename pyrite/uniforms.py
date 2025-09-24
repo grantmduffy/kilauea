@@ -197,7 +197,7 @@ class UniformBuffer:
         )
         return self.descriptor_set
 
-    def make_buffer(self):
+    def create(self):
         """Create the Vulkan buffer and map all uniforms to it"""
         if not self.uniforms:
             raise RuntimeError("No uniforms added to buffer")

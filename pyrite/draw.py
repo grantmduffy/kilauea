@@ -11,10 +11,13 @@ class Pass:
         self.app = app
         self.clear_color = clear_color
         self.final_layout = final_layout
+        self.app.swapchain.objects.append(self)
+
+    def create(self):
 
         # Determine load operation based on clear_color
-        load_op = vk.VK_ATTACHMENT_LOAD_OP_LOAD if clear_color is None else vk.VK_ATTACHMENT_LOAD_OP_CLEAR
-        initial_layout = vk.VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL if clear_color is None else vk.VK_IMAGE_LAYOUT_UNDEFINED
+        load_op = vk.VK_ATTACHMENT_LOAD_OP_LOAD if self.clear_color is None else vk.VK_ATTACHMENT_LOAD_OP_CLEAR
+        initial_layout = vk.VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL if self.clear_color is None else vk.VK_IMAGE_LAYOUT_UNDEFINED
 
         # TODO: dynamically create color attachment
         color_attachment = vk.VkAttachmentDescription(
@@ -25,7 +28,7 @@ class Pass:
             stencilLoadOp=vk.VK_ATTACHMENT_LOAD_OP_DONT_CARE,
             stencilStoreOp=vk.VK_ATTACHMENT_STORE_OP_DONT_CARE,
             initialLayout=initial_layout,
-            finalLayout=final_layout,
+            finalLayout=self.final_layout,
         )
         color_attachment_ref = vk.VkAttachmentReference(
             attachment=0,
@@ -46,10 +49,12 @@ class Pass:
             ), None
         )
         # Only create clear value if we're actually clearing
-        self._vk_clear_value = vk.VkClearValue(vk.VkClearColorValue(self.clear_color)) if clear_color is not None else None
+        self._vk_clear_value = vk.VkClearValue(vk.VkClearColorValue(self.clear_color)) if self.clear_color is not None else None
 
     def destroy(self):
-        vk.vkDestroyRenderPass(self.app._vk_device, self._vk_render_pass, None)
+        if hasattr(self, '_vk_render_pass') and self._vk_render_pass:
+            vk.vkDestroyRenderPass(self.app._vk_device, self._vk_render_pass, None)
+            self._vk_render_pass = None
 
     def start(self, command_buffer, target_image):
         return PassContext(self, command_buffer, target_image)
@@ -100,7 +105,9 @@ class Drawable:
         self.render_pass = render_pass
         self.uniforms = uniforms
         self.textures = textures or []
+        self.app.swapchain.objects.append(self)
 
+    def create(self):
         self.create_pipeline()
 
     def create_pipeline(self):
@@ -262,8 +269,12 @@ class Drawable:
             raise RuntimeError(f"Failed to create graphics pipeline: {e}")
 
     def destroy(self):
-        vk.vkDestroyPipeline(self.app._vk_device, self._vk_pipeline, None)
-        vk.vkDestroyPipelineLayout(self.app._vk_device, self._vk_pipeline_layout, None)
+        if hasattr(self, '_vk_pipeline') and self._vk_pipeline:
+            vk.vkDestroyPipeline(self.app._vk_device, self._vk_pipeline, None)
+            self._vk_pipeline = None
+        if hasattr(self, '_vk_pipeline_layout') and self._vk_pipeline_layout:
+            vk.vkDestroyPipelineLayout(self.app._vk_device, self._vk_pipeline_layout, None)
+            self._vk_pipeline_layout = None
     
     def draw(self, command_buffer, frame_index=None):
             

@@ -58,12 +58,19 @@ class Image:
         self.render_pass = render_pass
         self.created_image = image is None
         self.layout = vk.VK_IMAGE_LAYOUT_UNDEFINED
+        self.width, self.height = width, height
+        self.format = format
+        self.usage = usage
+        self.app.swapchain.objects.append(self)
 
+
+    def create(self):
         if self.created_image:
-            self.width = width or self.app._vk_extent.width
-            self.height = height or self.app._vk_extent.height
-            self.format = format or self.app.surface_format
-            self.usage = usage or (vk.VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | vk.VK_IMAGE_USAGE_SAMPLED_BIT)
+            # Always use current swapchain extent for user-created images during recreation
+            self.width = self.app._vk_extent.width
+            self.height = self.app._vk_extent.height
+            self.format = self.format or self.app.surface_format
+            self.usage = self.usage or (vk.VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | vk.VK_IMAGE_USAGE_SAMPLED_BIT)
 
             self._vk_image = vk.vkCreateImage(
                 self.app._vk_device,
@@ -131,12 +138,19 @@ class Image:
             self._vk_framebuffer = None
 
     def destroy(self):
-        if self._vk_framebuffer:
+        if hasattr(self, '_vk_framebuffer') and self._vk_framebuffer:
             vk.vkDestroyFramebuffer(self.app._vk_device, self._vk_framebuffer, None)
-        vk.vkDestroyImageView(self.app._vk_device, self._vk_image_view, None)
+            self._vk_framebuffer = None
+        if hasattr(self, '_vk_image_view') and self._vk_image_view:
+            vk.vkDestroyImageView(self.app._vk_device, self._vk_image_view, None)
+            self._vk_image_view = None
         if self.created_image:
-            vk.vkDestroyImage(self.app._vk_device, self._vk_image, None)
-            vk.vkFreeMemory(self.app._vk_device, self._vk_memory, None)
+            if hasattr(self, '_vk_image') and self._vk_image:
+                vk.vkDestroyImage(self.app._vk_device, self._vk_image, None)
+                self._vk_image = None
+            if hasattr(self, '_vk_memory') and self._vk_memory:
+                vk.vkFreeMemory(self.app._vk_device, self._vk_memory, None)
+                self._vk_memory = None
 
     def transition_layout(self, command_buffer, new_layout):
         if new_layout == self.layout:
@@ -189,11 +203,9 @@ class Texture:
     def __init__(self, app, image):
         self.app = app
         self.image = image
-        self.create_sampler()
-        self.create_descriptor_set_layout()
-        self.create_descriptor_set()
+        self.app.swapchain.objects.append(self)
 
-    def create_sampler(self):
+    def create(self):
         self._vk_sampler = vk.vkCreateSampler(
             self.app._vk_device,
             vk.VkSamplerCreateInfo(
@@ -211,8 +223,6 @@ class Texture:
             ),
             None
         )
-
-    def create_descriptor_set_layout(self):
         binding = vk.VkDescriptorSetLayoutBinding(
             binding=0,
             descriptorType=vk.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
@@ -227,8 +237,6 @@ class Texture:
             ),
             None
         )
-
-    def create_descriptor_set(self):
         self.descriptor_set = vk.vkAllocateDescriptorSets(
             self.app._vk_device,
             vk.VkDescriptorSetAllocateInfo(
@@ -255,5 +263,9 @@ class Texture:
         vk.vkUpdateDescriptorSets(self.app._vk_device, 1, [write_set,], 0, None)
 
     def destroy(self):
-        vk.vkDestroySampler(self.app._vk_device, self._vk_sampler, None)
-        vk.vkDestroyDescriptorSetLayout(self.app._vk_device, self.descriptor_set_layout, None)
+        if hasattr(self, '_vk_sampler') and self._vk_sampler:
+            vk.vkDestroySampler(self.app._vk_device, self._vk_sampler, None)
+            self._vk_sampler = None
+        if hasattr(self, 'descriptor_set_layout') and self.descriptor_set_layout:
+            vk.vkDestroyDescriptorSetLayout(self.app._vk_device, self.descriptor_set_layout, None)
+            self.descriptor_set_layout = None

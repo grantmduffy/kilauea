@@ -19,7 +19,7 @@ class MyApp(App):
         self.uniforms = UniformBuffer(self)
         self.uniforms['camera'] = Uniform(np.eye(4, dtype=np.float32), glsl_type='mat4')
         self.uniforms['time'] = Uniform(np.array([0.0], dtype=np.float32), glsl_type='float')
-        self.uniforms.make_buffer()
+        self.uniforms.create()
 
         self.pass1 = Pass(self, clear_color=(0, 0, 0, 0))
         self.mesh1 = Drawable(

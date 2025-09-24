@@ -11,7 +11,28 @@ class Swapchain:
         self.current_image = -1
         self._vk_swapchain = None
         self.parent = parent
+        self.objects = []
+        self.composite_alpha = composite_alpha
 
+        
+    def get_next_image(self, frame, timeout=1000000000):
+        self.current_image = vk.vkGetDeviceProcAddr(self.parent._vk_device, 'vkAcquireNextImageKHR')(
+            self.parent._vk_device, swapchain=self._vk_swapchain, timeout=timeout,
+            semaphore=frame.image_available_semaphore._vk_semaphore, fence=vk.VK_NULL_HANDLE
+        )
+        return self.current_image, self.command_buffers[self.current_image]
+
+    def present_image(self, image_i, signal_semaphore):
+        vk.vkGetDeviceProcAddr(self.parent._vk_device, 'vkQueuePresentKHR')(
+            self.parent._vk_queue, vk.VkPresentInfoKHR(
+                waitSemaphoreCount=1, pWaitSemaphores=[signal_semaphore._vk_semaphore],
+                swapchainCount=1, pSwapchains=[self._vk_swapchain],
+                pImageIndices=[image_i]
+            )
+        )
+
+    def create(self):
+        # First create the Vulkan swapchain
         supported_present_modes = vk.vkGetInstanceProcAddr(
             self.parent._vk_instance, 'vkGetPhysicalDeviceSurfacePresentModesKHR'
         )(self.parent._vk_physical_device, self.parent._vk_surface)
@@ -41,14 +62,16 @@ class Swapchain:
             queueFamilyIndexCount=queue_family_index_count,
             pQueueFamilyIndices=queue_family_indices,
             preTransform=self.parent.supported_surface_capabilities.currentTransform,
-            compositeAlpha=getattr(vk, f'VK_COMPOSITE_ALPHA_{composite_alpha.upper()}_BIT_KHR'),
+            compositeAlpha=getattr(vk, f'VK_COMPOSITE_ALPHA_{self.composite_alpha.upper()}_BIT_KHR'),
             presentMode=self.present_mode,
             clipped=vk.VK_TRUE
         ), None)
 
-        # create images
+        # Create swapchain images and internal objects BEFORE user objects
         self.command_buffers = CommandBuffer.make_command_buffers(self.parent, self.n_images)
         self.swapchain_render_pass = Pass(self.parent)
+        self.objects.pop()  # remove the pass so it's not recreated with other objects
+        self.swapchain_render_pass.create()
         self.images = [
             Image(self.parent, render_pass=self.swapchain_render_pass, image=x) 
             for x in vk.vkGetDeviceProcAddr(
@@ -56,27 +79,29 @@ class Swapchain:
             )(self.parent._vk_device, self._vk_swapchain)
         ]
         
-    def get_next_image(self, frame, timeout=1000000000):
-        self.current_image = vk.vkGetDeviceProcAddr(self.parent._vk_device, 'vkAcquireNextImageKHR')(
-            self.parent._vk_device, swapchain=self._vk_swapchain, timeout=timeout,
-            semaphore=frame.image_available_semaphore._vk_semaphore, fence=vk.VK_NULL_HANDLE
-        )
-        return self.current_image, self.command_buffers[self.current_image]
+        # Remove swapchain images from objects list so they're not recreated with user objects
+        # (they were added by Image.__init__)
+        for _ in range(len(self.images)):
+            self.objects.pop()
+        
+        # Create the swapchain images (image views and framebuffers)
+        for image in self.images:
+            image.create()
 
-    def present_image(self, image_i, signal_semaphore):
-        vk.vkGetDeviceProcAddr(self.parent._vk_device, 'vkQueuePresentKHR')(
-            self.parent._vk_queue, vk.VkPresentInfoKHR(
-                waitSemaphoreCount=1, pWaitSemaphores=[signal_semaphore._vk_semaphore],
-                swapchainCount=1, pSwapchains=[self._vk_swapchain],
-                pImageIndices=[image_i]
-            )
-        )
+        # NOW create user objects - swapchain images are available for reference
+        for o in self.objects:
+            o.create()
 
     def destroy(self):
+        for o in self.objects:
+            o.destroy()
         for image in self.images:
             image.destroy()
-        self.swapchain_render_pass.destroy()
-        vk.vkGetDeviceProcAddr(self.parent._vk_device, 'vkDestroySwapchainKHR')(self.parent._vk_device, self._vk_swapchain, None)
+        if hasattr(self, 'swapchain_render_pass'):
+            self.swapchain_render_pass.destroy()
+        if self._vk_swapchain:
+            vk.vkGetDeviceProcAddr(self.parent._vk_device, 'vkDestroySwapchainKHR')(self.parent._vk_device, self._vk_swapchain, None)
+            self._vk_swapchain = None
 
     def get_images(self):
         return zip(self.images, self.command_buffers)
