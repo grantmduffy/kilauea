@@ -10,9 +10,9 @@ class MyApp(App):
         super().__init__('MyApp')
 
         triangle = np.array([
-            [-0.8, -0.8, 1.0, 0.0, 0.0],
-            [0.8, -0.8, 0.0, 1.0, 0.0],
-            [0.0, 0.8, 0.0, 0.0, 1.0]
+            [-1, -1, 1.0, 0.0, 0.0],
+            [1, -1, 0.0, 1.0, 0.0],
+            [0.0, 1, 0.0, 0.0, 1.0]
         ], dtype=np.float32)
 
         full_screen = np.array([
@@ -70,7 +70,7 @@ class MyApp(App):
         self.uniforms['time'][0] = t
         
         # Animate camera matrix - translate X based on time
-        self.uniforms['camera'][0, 3] = 0.2 * np.sin(t)  # X translation
+        # self.uniforms['camera'][3, 1] = 0.2 * np.sin(t)  # X translation
         
         # FPS display
         if t - self.last_time > self.fps_interval:
