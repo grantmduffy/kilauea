@@ -2,6 +2,10 @@ from pyrite import App, UniformBuffer, Uniform, Pass, Image, Texture, Swapchain,
 import numpy as np
 import glfw
 import vulkan as vk
+from pathlib import Path
+
+
+path = Path(__file__).parent
 
 
 class MyApp(App):
@@ -33,14 +37,14 @@ class MyApp(App):
         
         self.mesh1 = Drawable(
             self, triangle, 
-            './glsl/triangle.vert', './glsl/triangle.frag', 
+            path / 'triangle.vert', path / 'triangle.frag', 
             self.pass1, 
             vertex_attributes=['vec2', 'vec3'],
             uniforms=self.uniforms
         )
         self.blur = Drawable(
             self, full_screen,
-            './glsl/blur.vert', './glsl/blur.frag',
+            path / 'blur.vert', path / 'blur.frag',
             self.pass2,
             vertex_attributes=['vec2'],
             uniforms=self.uniforms,
