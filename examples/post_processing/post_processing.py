@@ -13,11 +13,13 @@ class MyApp(App):
     def __init__(self):
         super().__init__('MyApp')
 
-        triangle = 0.5 * np.array([
+        triangle = np.array([
             [-1, -1, 1.0, 0.0, 0.0],
             [1, -1, 0.0, 1.0, 0.0],
             [0.0, 1, 0.0, 0.0, 1.0]
         ], dtype=np.float32)
+        triangle[:, :2] *= 0.5
+        triangle[:, 2:] *= 10
 
         full_screen = np.array([
             [-1, -1], [1, -1], [1, 1],
@@ -32,7 +34,7 @@ class MyApp(App):
 
         self.pass1 = Pass(self, final_layout=vk.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL)
         self.pass2 = Pass(self)
-        self.deferred_image = Image(self, render_pass=self.pass1)
+        self.deferred_image = Image(self, render_pass=self.pass1, format=vk.VK_FORMAT_R32G32B32A32_SFLOAT)
         self.deferred_texture = Texture(self, self.deferred_image)
         
         self.mesh1 = Drawable(

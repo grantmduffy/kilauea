@@ -18,4 +18,5 @@ void main() {
         outColor += texture(texSampler, fragTexCoord + vec2(0.0, i) * texelSize);
     }
     outColor /= 2 * size + 1;
+    outColor /= 3;
 }
