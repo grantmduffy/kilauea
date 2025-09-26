@@ -9,7 +9,7 @@ class MyApp(App):
     def __init__(self):
         super().__init__('MyApp')
 
-        triangle = np.array([
+        triangle = 0.5 * np.array([
             [-1, -1, 1.0, 0.0, 0.0],
             [1, -1, 0.0, 1.0, 0.0],
             [0.0, 1, 0.0, 0.0, 1.0]
@@ -52,13 +52,37 @@ class MyApp(App):
         self.fps_interval = 0.2
 
     def draw(self, command_buffer, swapchain_image):
-        with self.pass1.start(command_buffer, self.deferred_image):
+        with self.pass1.start(command_buffer, self.deferred_image) as pass_ctx:
+            # Set viewport and scissor for scaled resolution (pass 1)
+            viewport = vk.VkViewport(
+                x=0, y=0, 
+                width=float(pass_ctx.render_extent.width), 
+                height=float(pass_ctx.render_extent.height),
+                minDepth=0.0, maxDepth=1.0
+            )
+            scissor = vk.VkRect2D(offset=[0, 0], extent=pass_ctx.render_extent)
+            
+            vk.vkCmdSetViewport(command_buffer._vk_command_buffer, 0, 1, [viewport])
+            vk.vkCmdSetScissor(command_buffer._vk_command_buffer, 0, 1, [scissor])
+            
             self.mesh1.draw(command_buffer, 0)
 
         # Transition the off-screen image for shader reading
         self.deferred_image.transition_layout(command_buffer, vk.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL)
 
-        with self.pass2.start(command_buffer, swapchain_image):
+        with self.pass2.start(command_buffer, swapchain_image) as pass_ctx:
+            # Set viewport and scissor for full resolution (pass 2)
+            viewport = vk.VkViewport(
+                x=0, y=0, 
+                width=float(pass_ctx.render_extent.width), 
+                height=float(pass_ctx.render_extent.height),
+                minDepth=0.0, maxDepth=1.0
+            )
+            scissor = vk.VkRect2D(offset=[0, 0], extent=pass_ctx.render_extent)
+            
+            vk.vkCmdSetViewport(command_buffer._vk_command_buffer, 0, 1, [viewport])
+            vk.vkCmdSetScissor(command_buffer._vk_command_buffer, 0, 1, [scissor])
+            
             self.blur.draw(command_buffer, 0)
 
     def main_loop(self):
@@ -70,7 +94,7 @@ class MyApp(App):
         self.uniforms['time'][0] = t
         
         # Animate camera matrix - translate X based on time
-        # self.uniforms['camera'][3, 1] = 0.2 * np.sin(t)  # X translation
+        self.uniforms['camera'][3, 1] = 0.2 * np.sin(t)  # X translation
         
         # FPS display
         if t - self.last_time > self.fps_interval:

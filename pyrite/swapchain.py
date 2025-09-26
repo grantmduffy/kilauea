@@ -50,12 +50,15 @@ class Swapchain:
             image_sharing_mode = vk.VK_SHARING_MODE_CONCURRENT
             queue_family_index_count = 2
             queue_family_indices = [self.parent.graphics_queue_family_i, self.parent.present_queue_family_i]
+        # Use the window extent for swapchain image creation
+        print(f"Creating swapchain with extent: {self.parent._vk_extent.width}x{self.parent._vk_extent.height}")
+        
         self._vk_swapchain = vk.vkGetDeviceProcAddr(self.parent._vk_device, 'vkCreateSwapchainKHR')(self.parent._vk_device, vk.VkSwapchainCreateInfoKHR(
             surface=self.parent._vk_surface,
             minImageCount=self.n_images,
             imageFormat=self.parent.surface_format,
             imageColorSpace=self.parent.color_space,
-            imageExtent=self.parent._vk_extent,
+            imageExtent=self.parent._vk_extent,  # Use window extent for swapchain
             imageArrayLayers=1,
             imageUsage=vk.VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT, 
             imageSharingMode=image_sharing_mode,

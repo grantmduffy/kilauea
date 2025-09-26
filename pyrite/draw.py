@@ -72,14 +72,19 @@ class PassContext:
         clear_value_count = 1 if self.render_pass._vk_clear_value is not None else 0
         clear_values = self.render_pass._vk_clear_value if self.render_pass._vk_clear_value is not None else None
         
+        # Both user images and swapchain images now use scaled resolution
+        self.render_extent = vk.VkExtent2D(width=self.target_image.width, height=self.target_image.height)
+        
         vk.vkCmdBeginRenderPass(
             self.command_buffer._vk_command_buffer, vk.VkRenderPassBeginInfo(
                 renderPass=self.render_pass._vk_render_pass, framebuffer=self.target_image._vk_framebuffer, 
-                renderArea=vk.VkRect2D(offset=[0, 0], extent=self.render_pass.app._vk_extent), 
+                renderArea=vk.VkRect2D(offset=[0, 0], extent=self.render_extent), 
                 clearValueCount=clear_value_count, pClearValues=clear_values
             ),
             getattr(vk, f'VK_SUBPASS_CONTENTS_INLINE')
         )
+        
+        return self
 
     def __exit__(self, *args):
         vk.vkCmdEndRenderPass(self.command_buffer._vk_command_buffer)
@@ -139,15 +144,21 @@ class Drawable:
             primitiveRestartEnable=vk.VK_FALSE
         )
 
+        # Use dynamic viewport and scissor - they will be set at draw time
         viewport_state_ci = vk.VkPipelineViewportStateCreateInfo(
             sType=vk.VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO,
             viewportCount=1,
-            pViewports=[self.app._vk_viewport],
+            pViewports=None,  # Will be set dynamically
             scissorCount=1,
-            pScissors=[vk.VkRect2D(
-                offset=[0, 0],
-                extent=self.app._vk_extent
-            )]
+            pScissors=None    # Will be set dynamically
+        )
+        
+        # Enable dynamic viewport and scissor
+        dynamic_states = [vk.VK_DYNAMIC_STATE_VIEWPORT, vk.VK_DYNAMIC_STATE_SCISSOR]
+        dynamic_state_ci = vk.VkPipelineDynamicStateCreateInfo(
+            sType=vk.VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO,
+            dynamicStateCount=len(dynamic_states),
+            pDynamicStates=dynamic_states
         )
 
         # TODO: make some of this configurable
@@ -209,6 +220,7 @@ class Drawable:
             pMultisampleState=multisampling_ci,
             pDepthStencilState=None,
             pColorBlendState=color_blend_ci,
+            pDynamicState=dynamic_state_ci,
             layout=self._vk_pipeline_layout,
             renderPass=self.render_pass._vk_render_pass,
             subpass=0
@@ -295,12 +307,13 @@ class Drawable:
 
         # Bind texture descriptor sets
         if self.textures:
+            set_index = 1 if self.uniforms else 0  # Start after uniforms if they exist
             for i, texture in enumerate(self.textures):
                 vk.vkCmdBindDescriptorSets(
                     command_buffer._vk_command_buffer,
                     vk.VK_PIPELINE_BIND_POINT_GRAPHICS,
                     self._vk_pipeline_layout,
-                    1,  # firstSet (set 1 for textures)
+                    set_index + i,  # firstSet
                     1,  # descriptorSetCount
                     [texture.descriptor_set],
                     0,  # dynamicOffsetCount

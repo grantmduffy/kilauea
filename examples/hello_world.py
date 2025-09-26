@@ -10,9 +10,12 @@ class MyApp(App):
         super().__init__('MyApp', n_images=10, n_frames=9)
 
         triangle = np.array([
-            [-0.8, -0.8, 1.0, 0.0, 0.0],
-            [0.8, -0.8, 0.0, 1.0, 0.0],
-            [0.0, 0.8, 0.0, 0.0, 1.0]
+            # [-0.8, -0.8, 1.0, 0.0, 0.0],
+            # [0.8, -0.8, 0.0, 1.0, 0.0],
+            # [0.0, 0.8, 0.0, 0.0, 1.0]
+            [-1, -1, 1.0, 0.0, 0.0],
+            [1, -1, 0.0, 1.0, 0.0],
+            [-1, 1, 0.0, 0.0, 1.0]
         ], dtype=np.float32)
 
         # Create uniform buffer with proper initialization
@@ -37,22 +40,6 @@ class MyApp(App):
     def draw(self, command_buffer, swapchain_image):
         with self.pass1.start(command_buffer, swapchain_image):
             self.mesh1.draw(command_buffer, 0)
-
-    def cleanup_swapchain(self):
-        self.mesh1.destroy()
-        self.pass1.destroy()
-        self.swapchain.destroy()
-
-    def create_swapchain(self):
-        # Store the old n_images value
-        old_n_images = getattr(self.swapchain, 'n_images', 4)
-        
-        self.swapchain = Swapchain(self, old_n_images)
-        self.pass1 = Pass(self, clear_color=(0, 0, 0, 0))
-        
-        # Update render passes for drawables and recreate pipelines
-        self.mesh1.render_pass = self.pass1
-        self.mesh1.create_pipeline()
         
     def main_loop(self):
         # handle user input, update uniforms, etc.
@@ -63,7 +50,7 @@ class MyApp(App):
         self.uniforms['time'][0] = t
         
         # Animate camera matrix - translate X based on time
-        self.uniforms['camera'][0, 3] = 0.2 * np.sin(t)  # X translation
+        # self.uniforms['camera'][0, 3] = 0.2 * np.sin(t)  # X translation
         
         # FPS display
         if t - self.last_time > self.fps_interval:

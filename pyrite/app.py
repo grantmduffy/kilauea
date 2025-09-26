@@ -13,7 +13,7 @@ class App:
     def __init__(
                 self, title='Pyrite', size=(640, 480), n_frames=3, n_images=4, version=(1, 3, 0), 
                 engine_name='Pyrite', device_preference=['discrete_gpu', 'integrated_gpu', 'virtual_gpu', 'cpu'],
-                surface_format=vk.VK_FORMAT_B8G8R8A8_UNORM, color_space=vk.VK_COLOR_SPACE_SRGB_NONLINEAR_KHR,
+                surface_format=vk.VK_FORMAT_B8G8R8A8_UNORM, color_space=vk.VK_COLOR_SPACE_SRGB_NONLINEAR_KHR
 
             ):
         glfw.init()
@@ -45,7 +45,16 @@ class App:
          
     def init_vk(self):
 
-        self.window = glfw.create_window(*self.size, self.title, None, None)
+        # Handle fullscreen mode
+        if self.size == 'fullscreen':
+            # Get primary monitor and its video mode
+            primary_monitor = glfw.get_primary_monitor()
+            video_mode = glfw.get_video_mode(primary_monitor)
+            self.window = glfw.create_window(video_mode.size.width, video_mode.size.height, self.title, primary_monitor, None)
+            print(f"Created fullscreen window: {video_mode.size.width}x{video_mode.size.height}")
+        else:
+            self.window = glfw.create_window(*self.size, self.title, None, None)
+        
         glfw.set_framebuffer_size_callback(self.window, self.framebuffer_resize_callback)
 
         app_info = vk.VkApplicationInfo(
@@ -118,10 +127,15 @@ class App:
         self.supported_surface_capabilities = vk.vkGetInstanceProcAddr(
             self._vk_instance, 'vkGetPhysicalDeviceSurfaceCapabilitiesKHR'
         )(self._vk_physical_device, self._vk_surface, None)
-        self._vk_extent = vk.VkExtent2D(
-            width=max(min(w, self.supported_surface_capabilities.maxImageExtent.width), self.supported_surface_capabilities.minImageExtent.width), 
-            height=max(min(h, self.supported_surface_capabilities.maxImageExtent.height), self.supported_surface_capabilities.minImageExtent.height)
-        )
+        
+        # Store the window extent (full resolution) - this is also the swapchain extent
+        if self.supported_surface_capabilities.currentExtent.width != 0xFFFFFFFF:
+            self._vk_extent = self.supported_surface_capabilities.currentExtent
+        else:
+            self._vk_extent = vk.VkExtent2D(
+                width=max(min(w, self.supported_surface_capabilities.maxImageExtent.width), self.supported_surface_capabilities.minImageExtent.width), 
+                height=max(min(h, self.supported_surface_capabilities.maxImageExtent.height), self.supported_surface_capabilities.minImageExtent.height)
+            )
 
         queue_families = vk.vkGetPhysicalDeviceQueueFamilyProperties(self._vk_physical_device)
         self.graphics_queue_family_i = None
@@ -181,6 +195,11 @@ class App:
             x=0, y=0, width=self._vk_extent.width, height=self._vk_extent.height,
             minDepth=0.0, maxDepth=1.0
         )
+
+        print("\n--- INITIALIZATION ---")
+        print(f"Framebuffer size: ({w}, {h})")
+        print(f"Swapchain Extent: ({self._vk_extent.width}, {self._vk_extent.height})")
+        print(f"Initial Viewport: (x={self._vk_viewport.x}, y={self._vk_viewport.y}, w={self._vk_viewport.width}, h={self._vk_viewport.height})")
 
     def get_memory_type_index(self, type_bits, properties):
         mem_props = vk.vkGetPhysicalDeviceMemoryProperties(self._vk_physical_device)
@@ -1062,12 +1081,23 @@ class App:
         self.supported_surface_capabilities = vk.vkGetInstanceProcAddr(
             self._vk_instance, 'vkGetPhysicalDeviceSurfaceCapabilitiesKHR'
         )(self._vk_physical_device, self._vk_surface, None)
-        self._vk_extent = vk.VkExtent2D(
-            width=max(min(w, self.supported_surface_capabilities.maxImageExtent.width), self.supported_surface_capabilities.minImageExtent.width), 
-            height=max(min(h, self.supported_surface_capabilities.maxImageExtent.height), self.supported_surface_capabilities.minImageExtent.height)
-        )
-        self._vk_viewport.width = w
-        self._vk_viewport.height = h
+
+        # Update swapchain extent to match new window size
+        if self.supported_surface_capabilities.currentExtent.width != 0xFFFFFFFF:
+            self._vk_extent = self.supported_surface_capabilities.currentExtent
+        else:
+            self._vk_extent = vk.VkExtent2D(
+                width=max(min(w, self.supported_surface_capabilities.maxImageExtent.width), self.supported_surface_capabilities.minImageExtent.width), 
+                height=max(min(h, self.supported_surface_capabilities.maxImageExtent.height), self.supported_surface_capabilities.minImageExtent.height)
+            )
+        
+        self._vk_viewport.width = self._vk_extent.width
+        self._vk_viewport.height = self._vk_extent.height
+
+        print("\n--- RECREATE SWAPCHAIN ---")
+        print(f"Framebuffer size: ({w}, {h})")
+        print(f"New Swapchain Extent: ({self._vk_extent.width}, {self._vk_extent.height})")
+        print(f"New Viewport: (x={self._vk_viewport.x}, y={self._vk_viewport.y}, w={self._vk_viewport.width}, h={self._vk_viewport.height})")
 
         self.create_swapchain()
         self.record_draw_commands()

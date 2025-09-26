@@ -66,11 +66,16 @@ class Image:
 
     def create(self):
         if self.created_image:
-            # Always use current swapchain extent for user-created images during recreation
-            self.width = self.app._vk_extent.width
-            self.height = self.app._vk_extent.height
+            # Use explicit dimensions if provided, otherwise default to swapchain resolution
+            if self.width is None:
+                self.width = self.app._vk_extent.width
+            if self.height is None:
+                self.height = self.app._vk_extent.height
+            
             self.format = self.format or self.app.surface_format
             self.usage = self.usage or (vk.VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | vk.VK_IMAGE_USAGE_SAMPLED_BIT)
+            
+            print(f"Creating user image: {self.width}x{self.height}")
 
             self._vk_image = vk.vkCreateImage(
                 self.app._vk_device,
@@ -104,6 +109,9 @@ class Image:
             )
             vk.vkBindImageMemory(self.app._vk_device, self._vk_image, self._vk_memory, 0)
         else:
+            # For swapchain images, set dimensions from swapchain extent
+            self.width = self.app._vk_extent.width
+            self.height = self.app._vk_extent.height
             self.format = self.app.surface_format
 
 
@@ -123,14 +131,18 @@ class Image:
         )
 
         if self.render_pass:
+            # Both user images and swapchain images now use scaled resolution
+            fb_width = self.width if self.created_image else self.app._vk_extent.width
+            fb_height = self.height if self.created_image else self.app._vk_extent.height
+            
             self._vk_framebuffer = vk.vkCreateFramebuffer(
                 self.app._vk_device, 
                 vk.VkFramebufferCreateInfo(
                     renderPass=self.render_pass._vk_render_pass,
                     attachmentCount=1,
                     pAttachments=[self._vk_image_view,],
-                    width=self.app._vk_extent.width,
-                    height=self.app._vk_extent.height,
+                    width=fb_width,
+                    height=fb_height,
                     layers=1
                 ), None
             )
