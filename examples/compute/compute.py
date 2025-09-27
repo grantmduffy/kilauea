@@ -1,4 +1,4 @@
-from pyrite import App, UniformBuffer, Uniform, Pass, Image, Texture, Swapchain, Drawable, Compute, ComputePass
+from kilauea import App, UniformBuffer, Uniform, Pass, Image, Texture, Swapchain, Drawable, Compute, ComputePass
 import numpy as np
 import glfw
 import vulkan as vk

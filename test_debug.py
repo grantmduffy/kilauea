@@ -3,7 +3,7 @@
 Test script to demonstrate the advanced debugging capabilities including pipeline creation debugging
 """
 
-from pyrite import App
+from kilauea import App
 import vulkan as vk
 import numpy as np
 

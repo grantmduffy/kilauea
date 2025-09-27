@@ -11,8 +11,8 @@ import tempfile
 class App:
 
     def __init__(
-                self, title='Pyrite', size=(640, 480), n_frames=3, n_images=4, version=(1, 3, 0), 
-                engine_name='Pyrite', device_preference=['discrete_gpu', 'integrated_gpu', 'virtual_gpu', 'cpu'],
+                self, title='Kilauea', size=(640, 480), n_frames=3, n_images=4, version=(1, 3, 0), 
+                engine_name='Kilauea', device_preference=['discrete_gpu', 'integrated_gpu', 'virtual_gpu', 'cpu'],
                 surface_format=vk.VK_FORMAT_B8G8R8A8_UNORM, color_space=vk.VK_COLOR_SPACE_SRGB_NONLINEAR_KHR
 
             ):
