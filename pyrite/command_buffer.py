@@ -5,7 +5,7 @@ class CommandBuffer:
 
     @staticmethod
     def make_command_buffers(app, n):
-        return [CommandBuffer(x) for x in vk.vkAllocateCommandBuffers(
+        return [CommandBuffer(app, x) for x in vk.vkAllocateCommandBuffers(
             app._vk_device, vk.VkCommandBufferAllocateInfo(
                 commandPool=app._vk_command_pool,
                 level=getattr(vk, f'VK_COMMAND_BUFFER_LEVEL_PRIMARY'),
@@ -13,7 +13,8 @@ class CommandBuffer:
             )
         )]
 
-    def __init__(self, command_buffer):
+    def __init__(self, app, command_buffer):
+        self.app = app
         self._vk_command_buffer = command_buffer
 
     def __enter__(self):

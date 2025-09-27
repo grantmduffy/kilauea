@@ -73,7 +73,7 @@ class Image:
                 self.height = self.app._vk_extent.height
             
             self.format = self.format or self.app.surface_format
-            self.usage = self.usage or (vk.VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | vk.VK_IMAGE_USAGE_SAMPLED_BIT)
+            self.usage = self.usage or (vk.VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | vk.VK_IMAGE_USAGE_SAMPLED_BIT | vk.VK_IMAGE_USAGE_STORAGE_BIT)
             
             print(f"Creating user image: {self.width}x{self.height}")
 
@@ -194,6 +194,16 @@ class Image:
             barrier.dstAccessMask = vk.VK_ACCESS_SHADER_READ_BIT
             source_stage = vk.VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT
             destination_stage = vk.VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT
+        elif self.layout == vk.VK_IMAGE_LAYOUT_UNDEFINED and new_layout == vk.VK_IMAGE_LAYOUT_GENERAL:
+            barrier.srcAccessMask = 0
+            barrier.dstAccessMask = vk.VK_ACCESS_SHADER_WRITE_BIT
+            source_stage = vk.VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT
+            destination_stage = vk.VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT
+        elif self.layout == vk.VK_IMAGE_LAYOUT_GENERAL and new_layout == vk.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL:
+            barrier.srcAccessMask = vk.VK_ACCESS_SHADER_WRITE_BIT
+            barrier.dstAccessMask = vk.VK_ACCESS_SHADER_READ_BIT
+            source_stage = vk.VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT
+            destination_stage = vk.VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT
         else:
             # Generic transition - can be expanded
             barrier.srcAccessMask = 0
@@ -212,72 +222,35 @@ class Image:
 
 class Texture:
 
-    def __init__(self, app, image):
+    def __init__(self, app, image, storage=False):
         self.app = app
         self.image = image
+        self.storage = storage
         self.app.swapchain.objects.append(self)
 
     def create(self):
-        self._vk_sampler = vk.vkCreateSampler(
-            self.app._vk_device,
-            vk.VkSamplerCreateInfo(
-                magFilter=vk.VK_FILTER_LINEAR,
-                minFilter=vk.VK_FILTER_LINEAR,
-                addressModeU=vk.VK_SAMPLER_ADDRESS_MODE_REPEAT,
-                addressModeV=vk.VK_SAMPLER_ADDRESS_MODE_REPEAT,
-                addressModeW=vk.VK_SAMPLER_ADDRESS_MODE_REPEAT,
-                anisotropyEnable=vk.VK_FALSE,
-                borderColor=vk.VK_BORDER_COLOR_INT_OPAQUE_BLACK,
-                unnormalizedCoordinates=vk.VK_FALSE,
-                compareEnable=vk.VK_FALSE,
-                compareOp=vk.VK_COMPARE_OP_ALWAYS,
-                mipmapMode=vk.VK_SAMPLER_MIPMAP_MODE_LINEAR,
-            ),
-            None
-        )
-        binding = vk.VkDescriptorSetLayoutBinding(
-            binding=0,
-            descriptorType=vk.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-            descriptorCount=1,
-            stageFlags=vk.VK_SHADER_STAGE_FRAGMENT_BIT,
-        )
-        self.descriptor_set_layout = vk.vkCreateDescriptorSetLayout(
-            self.app._vk_device,
-            vk.VkDescriptorSetLayoutCreateInfo(
-                bindingCount=1,
-                pBindings=[binding,]
-            ),
-            None
-        )
-        self.descriptor_set = vk.vkAllocateDescriptorSets(
-            self.app._vk_device,
-            vk.VkDescriptorSetAllocateInfo(
-                descriptorPool=self.app._vk_descriptor_pool,
-                descriptorSetCount=1,
-                pSetLayouts=[self.descriptor_set_layout,]
+        if not self.storage:
+            self._vk_sampler = vk.vkCreateSampler(
+                self.app._vk_device,
+                vk.VkSamplerCreateInfo(
+                    magFilter=vk.VK_FILTER_LINEAR,
+                    minFilter=vk.VK_FILTER_LINEAR,
+                    addressModeU=vk.VK_SAMPLER_ADDRESS_MODE_REPEAT,
+                    addressModeV=vk.VK_SAMPLER_ADDRESS_MODE_REPEAT,
+                    addressModeW=vk.VK_SAMPLER_ADDRESS_MODE_REPEAT,
+                    anisotropyEnable=vk.VK_FALSE,
+                    borderColor=vk.VK_BORDER_COLOR_INT_OPAQUE_BLACK,
+                    unnormalizedCoordinates=vk.VK_FALSE,
+                    compareEnable=vk.VK_FALSE,
+                    compareOp=vk.VK_COMPARE_OP_ALWAYS,
+                    mipmapMode=vk.VK_SAMPLER_MIPMAP_MODE_LINEAR,
+                ),
+                None
             )
-        )[0]
-
-        image_info = vk.VkDescriptorImageInfo(
-            sampler=self._vk_sampler,
-            imageView=self.image._vk_image_view,
-            imageLayout=vk.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
-        )
-
-        write_set = vk.VkWriteDescriptorSet(
-            dstSet=self.descriptor_set,
-            dstBinding=0,
-            dstArrayElement=0,
-            descriptorType=vk.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-            descriptorCount=1,
-            pImageInfo=image_info
-        )
-        vk.vkUpdateDescriptorSets(self.app._vk_device, 1, [write_set,], 0, None)
+        else:
+            self._vk_sampler = None
 
     def destroy(self):
         if hasattr(self, '_vk_sampler') and self._vk_sampler:
             vk.vkDestroySampler(self.app._vk_device, self._vk_sampler, None)
             self._vk_sampler = None
-        if hasattr(self, 'descriptor_set_layout') and self.descriptor_set_layout:
-            vk.vkDestroyDescriptorSetLayout(self.app._vk_device, self.descriptor_set_layout, None)
-            self.descriptor_set_layout = None

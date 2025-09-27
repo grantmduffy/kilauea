@@ -21,11 +21,14 @@ class Shader:
             ),
             None
         )
-        self._vk_stage = vk.VkPipelineShaderStageCreateInfo(
-            sType=vk.VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
-            stage=getattr(vk, f'VK_SHADER_STAGE_{self.stage_name.upper()}_BIT'),
-            module=self._vk_module, pName='main'
-        )
+        if self.stage_name != 'compute':
+            self._vk_stage = vk.VkPipelineShaderStageCreateInfo(
+                sType=vk.VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+                stage=getattr(vk, f'VK_SHADER_STAGE_{self.stage_name.upper()}_BIT'),
+                module=self._vk_module, pName='main'
+            )
+        else:
+            self._vk_stage = None
 
     def compile(self):
         with tempfile.NamedTemporaryFile(delete=False, mode='w', suffix='.glsl') as infile, \

@@ -90,7 +90,7 @@ class PassContext:
         vk.vkCmdEndRenderPass(self.command_buffer._vk_command_buffer)
 
 
-class Drawable:
+class  Drawable:
 
     VERTEX_FORMAT_MAP = {
         'vec2': (vk.VK_FORMAT_R32G32_SFLOAT, 8),
@@ -113,7 +113,67 @@ class Drawable:
         self.app.swapchain.objects.append(self)
 
     def create(self):
+        self.create_descriptor_sets()
         self.create_pipeline()
+
+    def create_descriptor_sets(self):
+        """Create descriptor set layouts and descriptor sets based on provided resources"""
+        self.descriptor_set_layouts = []
+        self.descriptor_sets = []
+        
+        # Create descriptor set for uniforms (binding 0)
+        if self.uniforms:
+            self.descriptor_set_layouts.append(self.uniforms.descriptor_set_layout)
+            self.descriptor_sets.append(self.uniforms.descriptor_set)
+        
+        # Create descriptor set for textures (binding 1+)
+        if self.textures:
+            bindings = []
+            for i, texture in enumerate(self.textures):
+                bindings.append(vk.VkDescriptorSetLayoutBinding(
+                    binding=i,
+                    descriptorType=vk.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+                    descriptorCount=1,
+                    stageFlags=vk.VK_SHADER_STAGE_FRAGMENT_BIT,
+                ))
+            
+            texture_descriptor_set_layout = vk.vkCreateDescriptorSetLayout(
+                self.app._vk_device,
+                vk.VkDescriptorSetLayoutCreateInfo(
+                    bindingCount=len(bindings),
+                    pBindings=bindings
+                ),
+                None
+            )
+            self.descriptor_set_layouts.append(texture_descriptor_set_layout)
+
+            texture_descriptor_set = vk.vkAllocateDescriptorSets(
+                self.app._vk_device,
+                vk.VkDescriptorSetAllocateInfo(
+                    descriptorPool=self.app._vk_descriptor_pool,
+                    descriptorSetCount=1,
+                    pSetLayouts=[texture_descriptor_set_layout,]
+                )
+            )[0]
+
+            for i, texture in enumerate(self.textures):
+                image_info = vk.VkDescriptorImageInfo(
+                    sampler=texture._vk_sampler,
+                    imageView=texture.image._vk_image_view,
+                    imageLayout=vk.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
+                )
+
+                write_set = vk.VkWriteDescriptorSet(
+                    dstSet=texture_descriptor_set,
+                    dstBinding=i,
+                    dstArrayElement=0,
+                    descriptorType=vk.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+                    descriptorCount=1,
+                    pImageInfo=image_info
+                )
+                vk.vkUpdateDescriptorSets(self.app._vk_device, 1, [write_set,], 0, None)
+            
+            self.descriptor_sets.append(texture_descriptor_set)
 
     def create_pipeline(self):
         # infer vertex binding description from attributes list
@@ -190,19 +250,12 @@ class Drawable:
             blendConstants=[0.0, 0.0, 0.0, 0.0]
         )
 
-        # Create pipeline layout with descriptor set layout if uniforms are provided
-        descriptor_set_layouts = []
-        if self.uniforms:
-            descriptor_set_layouts.append(self.uniforms.descriptor_set_layout)
-        for texture in self.textures:
-            descriptor_set_layouts.append(texture.descriptor_set_layout)
-        
         self._vk_pipeline_layout = vk.vkCreatePipelineLayout(
             self.app._vk_device, 
             vk.VkPipelineLayoutCreateInfo(
                 sType=vk.VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
-                setLayoutCount=len(descriptor_set_layouts),
-                pSetLayouts=descriptor_set_layouts if descriptor_set_layouts else None
+                setLayoutCount=len(self.descriptor_set_layouts),
+                pSetLayouts=self.descriptor_set_layouts if self.descriptor_set_layouts else None
             ), None
         )
 
@@ -292,33 +345,209 @@ class Drawable:
             
         vk.vkCmdBindPipeline(command_buffer._vk_command_buffer, vk.VK_PIPELINE_BIND_POINT_GRAPHICS, self._vk_pipeline)
         
-        # Bind descriptor sets if uniforms are available
-        if self.uniforms and frame_index is not None:
+        viewport = vk.VkViewport(
+            x=0, y=0,
+            width=command_buffer.app._vk_extent.width,
+            height=command_buffer.app._vk_extent.height,
+            minDepth=0.0, maxDepth=1.0
+        )
+        vk.vkCmdSetViewport(command_buffer._vk_command_buffer, 0, 1, [viewport])
+
+        scissor = vk.VkRect2D(
+            offset=vk.VkOffset2D(x=0, y=0),
+            extent=command_buffer.app._vk_extent
+        )
+        vk.vkCmdSetScissor(command_buffer._vk_command_buffer, 0, 1, [scissor])
+
+        # Bind descriptor sets
+        for i, dset in enumerate(self.descriptor_sets):
             vk.vkCmdBindDescriptorSets(
                 command_buffer._vk_command_buffer,
                 vk.VK_PIPELINE_BIND_POINT_GRAPHICS,
                 self._vk_pipeline_layout,
-                0,  # firstSet
-                1,  # descriptorSetCount
-                [self.uniforms.descriptor_set],
-                0,  # dynamicOffsetCount
-                None  # pDynamicOffsets
+                i,
+                1,
+                [dset],
+                0,
+                None
             )
-
-        # Bind texture descriptor sets
-        if self.textures:
-            set_index = 1 if self.uniforms else 0  # Start after uniforms if they exist
-            for i, texture in enumerate(self.textures):
-                vk.vkCmdBindDescriptorSets(
-                    command_buffer._vk_command_buffer,
-                    vk.VK_PIPELINE_BIND_POINT_GRAPHICS,
-                    self._vk_pipeline_layout,
-                    set_index + i,  # firstSet
-                    1,  # descriptorSetCount
-                    [texture.descriptor_set],
-                    0,  # dynamicOffsetCount
-                    None  # pDynamicOffsets
-                )
         
         vk.vkCmdBindVertexBuffers(command_buffer._vk_command_buffer, 0, 1, [self.vertices._vk_buffer], [0])
         vk.vkCmdDraw(command_buffer._vk_command_buffer, len(self.vertices.data), 1, 0, 0)
+
+
+class Compute:
+
+    def __init__(self, app, compute_shader: Shader | str | Path, uniforms=None, storage_images=None):
+        self.app = app
+        self.compute_shader = Shader(app, compute_shader, 'compute') if not isinstance(compute_shader, Shader) else compute_shader
+        self.uniforms = uniforms
+        self.storage_images = storage_images or []
+        self.app.swapchain.objects.append(self)
+
+    def create(self):
+        self.create_descriptor_sets()
+        self.create_pipeline()
+
+    def create_descriptor_sets(self):
+        """Create descriptor set layouts and descriptor sets based on provided resources"""
+        self.descriptor_set_layouts = []
+        self.descriptor_sets = []
+        
+        # Create a single descriptor set with both uniforms and storage images
+        if self.uniforms or self.storage_images:
+            bindings = []
+            
+            # Add uniform buffer binding (binding 0)
+            if self.uniforms:
+                bindings.append(vk.VkDescriptorSetLayoutBinding(
+                    binding=0,
+                    descriptorType=vk.VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+                    descriptorCount=1,
+                    stageFlags=vk.VK_SHADER_STAGE_COMPUTE_BIT,
+                ))
+            
+            # Add storage image bindings (binding 1+)
+            if self.storage_images:
+                for i, storage_image in enumerate(self.storage_images):
+                    bindings.append(vk.VkDescriptorSetLayoutBinding(
+                        binding=1 + i,  # Start at binding 1
+                        descriptorType=vk.VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
+                        descriptorCount=1,
+                        stageFlags=vk.VK_SHADER_STAGE_COMPUTE_BIT,
+                    ))
+            
+            # Create descriptor set layout
+            descriptor_set_layout = vk.vkCreateDescriptorSetLayout(
+                self.app._vk_device,
+                vk.VkDescriptorSetLayoutCreateInfo(
+                    bindingCount=len(bindings),
+                    pBindings=bindings
+                ),
+                None
+            )
+            self.descriptor_set_layouts.append(descriptor_set_layout)
+
+            # Allocate descriptor set
+            descriptor_set = vk.vkAllocateDescriptorSets(
+                self.app._vk_device,
+                vk.VkDescriptorSetAllocateInfo(
+                    descriptorPool=self.app._vk_descriptor_pool,
+                    descriptorSetCount=1,
+                    pSetLayouts=[descriptor_set_layout,]
+                )
+            )[0]
+
+            # Update descriptor set with uniform buffer (if present)
+            if self.uniforms:
+                buffer_info = vk.VkDescriptorBufferInfo(
+                    buffer=self.uniforms._vk_buffer,
+                    offset=0,
+                    range=self.uniforms.total_size
+                )
+
+                write_set = vk.VkWriteDescriptorSet(
+                    dstSet=descriptor_set,
+                    dstBinding=0,
+                    dstArrayElement=0,
+                    descriptorType=vk.VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+                    descriptorCount=1,
+                    pBufferInfo=buffer_info
+                )
+                vk.vkUpdateDescriptorSets(self.app._vk_device, 1, [write_set,], 0, None)
+
+            # Update descriptor set with storage images (if present)
+            if self.storage_images:
+                for i, storage_image in enumerate(self.storage_images):
+                    image_info = vk.VkDescriptorImageInfo(
+                        sampler=None,
+                        imageView=storage_image.image._vk_image_view,
+                        imageLayout=vk.VK_IMAGE_LAYOUT_GENERAL
+                    )
+
+                    write_set = vk.VkWriteDescriptorSet(
+                        dstSet=descriptor_set,
+                        dstBinding=1 + i,  # Start at binding 1
+                        dstArrayElement=0,
+                        descriptorType=vk.VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
+                        descriptorCount=1,
+                        pImageInfo=image_info
+                    )
+                    vk.vkUpdateDescriptorSets(self.app._vk_device, 1, [write_set,], 0, None)
+            
+            self.descriptor_sets.append(descriptor_set)
+
+    def create_pipeline(self):
+        self._vk_pipeline_layout = vk.vkCreatePipelineLayout(
+            self.app._vk_device, 
+            vk.VkPipelineLayoutCreateInfo(
+                sType=vk.VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
+                setLayoutCount=len(self.descriptor_set_layouts),
+                pSetLayouts=self.descriptor_set_layouts if self.descriptor_set_layouts else None
+            ), None
+        )
+
+        shader_stage = vk.VkPipelineShaderStageCreateInfo(
+            sType=vk.VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+            stage=vk.VK_SHADER_STAGE_COMPUTE_BIT,
+            module=self.compute_shader._vk_module,
+            pName='main'
+        )
+        
+        # Create pipeline
+        pipeline_create_info = vk.VkComputePipelineCreateInfo(
+            sType=vk.VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO,
+            stage=shader_stage,
+            layout=self._vk_pipeline_layout
+        )
+        
+        self._vk_pipeline = vk.vkCreateComputePipelines(
+            self.app._vk_device, 
+            vk.VK_NULL_HANDLE, 
+            1, 
+            [pipeline_create_info], 
+            None
+        )[0]
+
+    def destroy(self):
+        if hasattr(self, '_vk_pipeline') and self._vk_pipeline:
+            vk.vkDestroyPipeline(self.app._vk_device, self._vk_pipeline, None)
+            self._vk_pipeline = None
+        if hasattr(self, '_vk_pipeline_layout') and self._vk_pipeline_layout:
+            vk.vkDestroyPipelineLayout(self.app._vk_device, self._vk_pipeline_layout, None)
+            self._vk_pipeline_layout = None
+    
+    def dispatch(self, command_buffer, x, y, z):
+        vk.vkCmdBindPipeline(command_buffer._vk_command_buffer, vk.VK_PIPELINE_BIND_POINT_COMPUTE, self._vk_pipeline)
+        
+        # Bind descriptor sets
+        for i, dset in enumerate(self.descriptor_sets):
+            vk.vkCmdBindDescriptorSets(
+                command_buffer._vk_command_buffer,
+                vk.VK_PIPELINE_BIND_POINT_COMPUTE,
+                self._vk_pipeline_layout,
+                i,
+                1,
+                [dset],
+                0,
+                None
+            )
+        
+        vk.vkCmdDispatch(command_buffer._vk_command_buffer, x, y, z)
+
+
+class ComputePass:
+    
+    def __init__(self, app):
+        self.app = app
+
+    def start(self, command_buffer, target_image):
+        self.command_buffer = command_buffer
+        self.target_image = target_image
+        return self
+
+    def __enter__(self):
+        self.target_image.transition_layout(self.command_buffer, vk.VK_IMAGE_LAYOUT_GENERAL)
+
+    def __exit__(self, *args):
+        self.target_image.transition_layout(self.command_buffer, vk.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL)
