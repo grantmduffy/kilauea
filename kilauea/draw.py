@@ -3,23 +3,45 @@ import numpy as np
 from .shaders import Shader
 from pathlib import Path
 from .buffer import Buffer
+from .command_buffer import CommandBuffer
+from .frame import Semaphore
+from .descriptor import DescriptorSet
 
 
 class Pass:
     
-    def __init__(self, app, clear_color=(0, 0, 0, 0), final_layout=vk.VK_IMAGE_LAYOUT_PRESENT_SRC_KHR):
+    def __init__(self, app, clear_color=(0, 0, 0, 0), final_layout=vk.VK_IMAGE_LAYOUT_PRESENT_SRC_KHR, n_images=None, wait_for=None, wait_stage=None, compute=False):
         self.app = app
         self.clear_color = clear_color
         self.final_layout = final_layout
         self.app.swapchain.objects.append(self)
+        self.n_images = self.app.swapchain.n_images or n_images
+        self.wait_for = wait_for or []
+        self.app.passes.append(self)
+        self.compute = compute
+        self.wait_dist_stage = wait_stage
 
     def create(self):
+
+        # create command buffers and semiphores for this pass
+        # n_images command buffers, n_frames semaphores
+        self.command_buffers = CommandBuffer.make_command_buffers(self.app, self.n_images)
+        for x in self.wait_for:
+            for i, frame in enumerate(self.app.frames):
+                if x == self.app.swapchain:  # use the image_available_semaphore
+                    # (signaler, consumer) -> semaphore
+                    frame.pass_semaphores[(x, self)] = frame.image_available_semaphore
+                else:
+                    # (signaler, consumer) -> semaphore
+                    frame.pass_semaphores[(x, self)] = Semaphore(self.app)
+
+        if self.compute: # nothing else to do for compute passes
+            return
 
         # Determine load operation based on clear_color
         load_op = vk.VK_ATTACHMENT_LOAD_OP_LOAD if self.clear_color is None else vk.VK_ATTACHMENT_LOAD_OP_CLEAR
         initial_layout = vk.VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL if self.clear_color is None else vk.VK_IMAGE_LAYOUT_UNDEFINED
 
-        # TODO: dynamically create color attachment
         color_attachment = vk.VkAttachmentDescription(
             format=self.app.surface_format,
             samples=vk.VK_SAMPLE_COUNT_1_BIT,
@@ -56,38 +78,58 @@ class Pass:
             vk.vkDestroyRenderPass(self.app._vk_device, self._vk_render_pass, None)
             self._vk_render_pass = None
 
-    def start(self, command_buffer, target_image):
-        return PassContext(self, command_buffer, target_image)
+    def start(self, image_i, target_images: list):  # called when recording commands
+        return PassContext(self, image_i, target_images)
 
 
 class PassContext:
 
-    def __init__(self, render_pass, command_buffer, target_image):
+    def __init__(self, render_pass, image_i, target_images):
         self.render_pass = render_pass
-        self.command_buffer = command_buffer
-        self.target_image = target_image
+        self.image_i = image_i
+        self.target_images = target_images
+        self.command_buffer = self.render_pass.command_buffers[self.image_i]
 
     def __enter__(self):
-        # Set clear value count and pointer based on whether we're clearing
-        clear_value_count = 1 if self.render_pass._vk_clear_value is not None else 0
-        clear_values = self.render_pass._vk_clear_value if self.render_pass._vk_clear_value is not None else None
-        
-        # Both user images and swapchain images now use scaled resolution
-        self.render_extent = vk.VkExtent2D(width=self.target_image.width, height=self.target_image.height)
-        
-        vk.vkCmdBeginRenderPass(
-            self.command_buffer._vk_command_buffer, vk.VkRenderPassBeginInfo(
-                renderPass=self.render_pass._vk_render_pass, framebuffer=self.target_image._vk_framebuffer, 
-                renderArea=vk.VkRect2D(offset=[0, 0], extent=self.render_extent), 
-                clearValueCount=clear_value_count, pClearValues=clear_values
-            ),
-            getattr(vk, f'VK_SUBPASS_CONTENTS_INLINE')
-        )
+        self.command_buffer.__enter__()
+        if self.render_pass.compute:
+            for image_i in range(self.target_images.n_images):
+                self.target_images.transition_layout(self.command_buffer, vk.VK_IMAGE_LAYOUT_GENERAL, image_i)
+        else:
+            # Set clear value count and pointer based on whether we're clearing
+            clear_value_count = 1 if self.render_pass._vk_clear_value is not None else 0
+            clear_values = self.render_pass._vk_clear_value if self.render_pass._vk_clear_value is not None else None
+
+            render_extent = self.target_images.extent
+            framebuffer = vk.vkCreateFramebuffer(
+                self.render_pass.app._vk_device, 
+                vk.VkFramebufferCreateInfo(
+                    renderPass=self.render_pass._vk_render_pass,
+                    attachmentCount=self.target_images.n_images,
+                    pAttachments=self.target_images._vk_image_views,
+                    width=self.target_images.extent.width,
+                    height=self.target_images.extent.height,
+                    layers=1
+                ), None
+            )
+            vk.vkCmdBeginRenderPass(
+                self.command_buffer._vk_command_buffer, vk.VkRenderPassBeginInfo(
+                    renderPass=self.render_pass._vk_render_pass, framebuffer=framebuffer, 
+                    renderArea=vk.VkRect2D(offset=[0, 0], extent=render_extent._vk_extent), 
+                    clearValueCount=clear_value_count, pClearValues=clear_values
+                ),
+                getattr(vk, f'VK_SUBPASS_CONTENTS_INLINE')
+            )
         
         return self
 
     def __exit__(self, *args):
-        vk.vkCmdEndRenderPass(self.command_buffer._vk_command_buffer)
+        if self.render_pass.compute:
+            for image_i in range(self.target_images.n_images):
+                self.target_images.transition_layout(self.command_buffer, vk.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, image_i)
+        else:
+            vk.vkCmdEndRenderPass(self.command_buffer._vk_command_buffer)
+        self.command_buffer.__exit__()
 
 
 class  Drawable:
@@ -98,8 +140,8 @@ class  Drawable:
         'vec4': (vk.VK_FORMAT_R32G32B32A32_SFLOAT, 16),
     }
     
-    def __init__(self, app, vertices: np.ndarray, vertex_shader: Shader | str | Path, fragment_shader: Shader | str, 
-                 render_pass, indices: np.ndarray=None, targets=None, vertex_attributes=None, uniforms=None, textures=None):
+    def __init__(self, app, vertices: np.ndarray, vertex_shader: Shader | str | Path, fragment_shader: Shader | str,
+                 render_pass, indices: np.ndarray=None, targets=None, vertex_attributes=None, descriptor_sets=None):
         self.app = app
         self.vertices = Buffer(app, vertices)
         self.indices = Buffer(indices) if indices is not None else None
@@ -108,80 +150,22 @@ class  Drawable:
         self.targets = targets
         self.vertex_attributes = vertex_attributes or []
         self.render_pass = render_pass
-        self.uniforms = uniforms
-        self.textures = textures or []
+        self.descriptor_sets = descriptor_sets or []
         self.app.swapchain.objects.append(self)
 
     def create(self):
-        self.create_descriptor_sets()
         self.create_pipeline()
 
-    def create_descriptor_sets(self):
-        """Create descriptor set layouts and descriptor sets based on provided resources"""
-        self.descriptor_set_layouts = []
-        self.descriptor_sets = []
-        
-        # Create descriptor set for uniforms (binding 0)
-        if self.uniforms:
-            self.descriptor_set_layouts.append(self.uniforms.descriptor_set_layout)
-            self.descriptor_sets.append(self.uniforms.descriptor_set)
-        
-        # Create descriptor set for textures (binding 1+)
-        if self.textures:
-            bindings = []
-            for i, texture in enumerate(self.textures):
-                bindings.append(vk.VkDescriptorSetLayoutBinding(
-                    binding=i,
-                    descriptorType=vk.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-                    descriptorCount=1,
-                    stageFlags=vk.VK_SHADER_STAGE_FRAGMENT_BIT,
-                ))
-            
-            texture_descriptor_set_layout = vk.vkCreateDescriptorSetLayout(
-                self.app._vk_device,
-                vk.VkDescriptorSetLayoutCreateInfo(
-                    bindingCount=len(bindings),
-                    pBindings=bindings
-                ),
-                None
-            )
-            self.descriptor_set_layouts.append(texture_descriptor_set_layout)
-
-            texture_descriptor_set = vk.vkAllocateDescriptorSets(
-                self.app._vk_device,
-                vk.VkDescriptorSetAllocateInfo(
-                    descriptorPool=self.app._vk_descriptor_pool,
-                    descriptorSetCount=1,
-                    pSetLayouts=[texture_descriptor_set_layout,]
-                )
-            )[0]
-
-            for i, texture in enumerate(self.textures):
-                image_info = vk.VkDescriptorImageInfo(
-                    sampler=texture._vk_sampler,
-                    imageView=texture.image._vk_image_view,
-                    imageLayout=vk.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
-                )
-
-                write_set = vk.VkWriteDescriptorSet(
-                    dstSet=texture_descriptor_set,
-                    dstBinding=i,
-                    dstArrayElement=0,
-                    descriptorType=vk.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-                    descriptorCount=1,
-                    pImageInfo=image_info
-                )
-                vk.vkUpdateDescriptorSets(self.app._vk_device, 1, [write_set,], 0, None)
-            
-            self.descriptor_sets.append(texture_descriptor_set)
-
     def create_pipeline(self):
+        # Use layouts from provided descriptor_sets
+        _vk_layouts = [ds._vk_descriptor_set_layout for ds in self.descriptor_sets]
+
         # infer vertex binding description from attributes list
         stride = sum(self.VERTEX_FORMAT_MAP[attr][1] for attr in self.vertex_attributes)
         vertex_binding_description = vk.VkVertexInputBindingDescription(
             binding=0, stride=stride, inputRate=vk.VK_VERTEX_INPUT_RATE_VERTEX
         )
-        
+
         attribute_descriptions = []
         offset = 0
         for i, attr in enumerate(self.vertex_attributes):
@@ -212,7 +196,7 @@ class  Drawable:
             scissorCount=1,
             pScissors=None    # Will be set dynamically
         )
-        
+
         # Enable dynamic viewport and scissor
         dynamic_states = [vk.VK_DYNAMIC_STATE_VIEWPORT, vk.VK_DYNAMIC_STATE_SCISSOR]
         dynamic_state_ci = vk.VkPipelineDynamicStateCreateInfo(
@@ -251,11 +235,11 @@ class  Drawable:
         )
 
         self._vk_pipeline_layout = vk.vkCreatePipelineLayout(
-            self.app._vk_device, 
+            self.app._vk_device,
             vk.VkPipelineLayoutCreateInfo(
                 sType=vk.VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
-                setLayoutCount=len(self.descriptor_set_layouts),
-                pSetLayouts=self.descriptor_set_layouts if self.descriptor_set_layouts else None
+                setLayoutCount=len(_vk_layouts),
+                pSetLayouts=_vk_layouts
             ), None
         )
 
@@ -341,10 +325,11 @@ class  Drawable:
             vk.vkDestroyPipelineLayout(self.app._vk_device, self._vk_pipeline_layout, None)
             self._vk_pipeline_layout = None
     
-    def draw(self, command_buffer, frame_index=None):
-            
+    def draw(self, pass_context: PassContext):
+
+        command_buffer = pass_context.command_buffer
         vk.vkCmdBindPipeline(command_buffer._vk_command_buffer, vk.VK_PIPELINE_BIND_POINT_GRAPHICS, self._vk_pipeline)
-        
+
         viewport = vk.VkViewport(
             x=0, y=0,
             width=command_buffer.app._vk_extent.width,
@@ -359,131 +344,34 @@ class  Drawable:
         )
         vk.vkCmdSetScissor(command_buffer._vk_command_buffer, 0, 1, [scissor])
 
-        # Bind descriptor sets
-        for i, dset in enumerate(self.descriptor_sets):
-            vk.vkCmdBindDescriptorSets(
-                command_buffer._vk_command_buffer,
-                vk.VK_PIPELINE_BIND_POINT_GRAPHICS,
-                self._vk_pipeline_layout,
-                i,
-                1,
-                [dset],
-                0,
-                None
-            )
-        
+        # Bind descriptor sets automatically
+        DescriptorSet.bind(self._vk_pipeline_layout, command_buffer, self.descriptor_sets, pass_context.image_i)
+
         vk.vkCmdBindVertexBuffers(command_buffer._vk_command_buffer, 0, 1, [self.vertices._vk_buffer], [0])
         vk.vkCmdDraw(command_buffer._vk_command_buffer, len(self.vertices.data), 1, 0, 0)
 
 
 class Compute:
 
-    def __init__(self, app, compute_shader: Shader | str | Path, uniforms=None, storage_images=None):
+    def __init__(self, app, compute_shader: Shader | str | Path, descriptor_sets=None):
         self.app = app
         self.compute_shader = Shader(app, compute_shader, 'compute') if not isinstance(compute_shader, Shader) else compute_shader
-        self.uniforms = uniforms
-        self.storage_images = storage_images or []
+        self.descriptor_sets = descriptor_sets or []
         self.app.swapchain.objects.append(self)
 
     def create(self):
-        self.create_descriptor_sets()
         self.create_pipeline()
 
-    def create_descriptor_sets(self):
-        """Create descriptor set layouts and descriptor sets based on provided resources"""
-        self.descriptor_set_layouts = []
-        self.descriptor_sets = []
-        
-        # Create a single descriptor set with both uniforms and storage images
-        if self.uniforms or self.storage_images:
-            bindings = []
-            
-            # Add uniform buffer binding (binding 0)
-            if self.uniforms:
-                bindings.append(vk.VkDescriptorSetLayoutBinding(
-                    binding=0,
-                    descriptorType=vk.VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
-                    descriptorCount=1,
-                    stageFlags=vk.VK_SHADER_STAGE_COMPUTE_BIT,
-                ))
-            
-            # Add storage image bindings (binding 1+)
-            if self.storage_images:
-                for i, storage_image in enumerate(self.storage_images):
-                    bindings.append(vk.VkDescriptorSetLayoutBinding(
-                        binding=1 + i,  # Start at binding 1
-                        descriptorType=vk.VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
-                        descriptorCount=1,
-                        stageFlags=vk.VK_SHADER_STAGE_COMPUTE_BIT,
-                    ))
-            
-            # Create descriptor set layout
-            descriptor_set_layout = vk.vkCreateDescriptorSetLayout(
-                self.app._vk_device,
-                vk.VkDescriptorSetLayoutCreateInfo(
-                    bindingCount=len(bindings),
-                    pBindings=bindings
-                ),
-                None
-            )
-            self.descriptor_set_layouts.append(descriptor_set_layout)
-
-            # Allocate descriptor set
-            descriptor_set = vk.vkAllocateDescriptorSets(
-                self.app._vk_device,
-                vk.VkDescriptorSetAllocateInfo(
-                    descriptorPool=self.app._vk_descriptor_pool,
-                    descriptorSetCount=1,
-                    pSetLayouts=[descriptor_set_layout,]
-                )
-            )[0]
-
-            # Update descriptor set with uniform buffer (if present)
-            if self.uniforms:
-                buffer_info = vk.VkDescriptorBufferInfo(
-                    buffer=self.uniforms._vk_buffer,
-                    offset=0,
-                    range=self.uniforms.total_size
-                )
-
-                write_set = vk.VkWriteDescriptorSet(
-                    dstSet=descriptor_set,
-                    dstBinding=0,
-                    dstArrayElement=0,
-                    descriptorType=vk.VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
-                    descriptorCount=1,
-                    pBufferInfo=buffer_info
-                )
-                vk.vkUpdateDescriptorSets(self.app._vk_device, 1, [write_set,], 0, None)
-
-            # Update descriptor set with storage images (if present)
-            if self.storage_images:
-                for i, storage_image in enumerate(self.storage_images):
-                    image_info = vk.VkDescriptorImageInfo(
-                        sampler=None,
-                        imageView=storage_image.image._vk_image_view,
-                        imageLayout=vk.VK_IMAGE_LAYOUT_GENERAL
-                    )
-
-                    write_set = vk.VkWriteDescriptorSet(
-                        dstSet=descriptor_set,
-                        dstBinding=1 + i,  # Start at binding 1
-                        dstArrayElement=0,
-                        descriptorType=vk.VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
-                        descriptorCount=1,
-                        pImageInfo=image_info
-                    )
-                    vk.vkUpdateDescriptorSets(self.app._vk_device, 1, [write_set,], 0, None)
-            
-            self.descriptor_sets.append(descriptor_set)
-
     def create_pipeline(self):
+
+        _vk_layouts = [ds._vk_descriptor_set_layout for ds in self.descriptor_sets]
+
         self._vk_pipeline_layout = vk.vkCreatePipelineLayout(
-            self.app._vk_device, 
+            self.app._vk_device,
             vk.VkPipelineLayoutCreateInfo(
                 sType=vk.VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
-                setLayoutCount=len(self.descriptor_set_layouts),
-                pSetLayouts=self.descriptor_set_layouts if self.descriptor_set_layouts else None
+                setLayoutCount=len(_vk_layouts),
+                pSetLayouts=_vk_layouts if _vk_layouts else None
             ), None
         )
 
@@ -517,37 +405,8 @@ class Compute:
             vk.vkDestroyPipelineLayout(self.app._vk_device, self._vk_pipeline_layout, None)
             self._vk_pipeline_layout = None
     
-    def dispatch(self, command_buffer, x, y, z):
+    def dispatch(self, pass_context: PassContext, x, y, z):
+        command_buffer = pass_context.command_buffer
         vk.vkCmdBindPipeline(command_buffer._vk_command_buffer, vk.VK_PIPELINE_BIND_POINT_COMPUTE, self._vk_pipeline)
-        
-        # Bind descriptor sets
-        for i, dset in enumerate(self.descriptor_sets):
-            vk.vkCmdBindDescriptorSets(
-                command_buffer._vk_command_buffer,
-                vk.VK_PIPELINE_BIND_POINT_COMPUTE,
-                self._vk_pipeline_layout,
-                i,
-                1,
-                [dset],
-                0,
-                None
-            )
-        
+        DescriptorSet.bind(self._vk_pipeline_layout, command_buffer, self.descriptor_sets, pass_context.image_i, bind_point=vk.VK_PIPELINE_BIND_POINT_COMPUTE)
         vk.vkCmdDispatch(command_buffer._vk_command_buffer, x, y, z)
-
-
-class ComputePass:
-    
-    def __init__(self, app):
-        self.app = app
-
-    def start(self, command_buffer, target_image):
-        self.command_buffer = command_buffer
-        self.target_image = target_image
-        return self
-
-    def __enter__(self):
-        self.target_image.transition_layout(self.command_buffer, vk.VK_IMAGE_LAYOUT_GENERAL)
-
-    def __exit__(self, *args):
-        self.target_image.transition_layout(self.command_buffer, vk.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL)

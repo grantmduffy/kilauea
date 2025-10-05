@@ -6,17 +6,20 @@ class Frame:
     def __init__(self, parent):
         self.parent = parent
         self.image_available_semaphore = Semaphore(parent)
-        self.render_finished_semaphore = Semaphore(parent)
+        self.pass_semaphores = {}  # keys: (semaphore_signaler, semaphore_consumer)
         self.fence = Fence(parent)
-
-    def recreate_sync_objects(self):
-        # Destroy old semaphores
-        self.image_available_semaphore.destroy()
-        self.render_finished_semaphore.destroy()
-        
-        # Create new ones
         self.image_available_semaphore = Semaphore(self.parent)
-        self.render_finished_semaphore = Semaphore(self.parent)
+
+    # def create(self):
+    #     self.image_available_semaphore = Semaphore(self.parent)
+    #     for k in self.pass_semaphores:
+    #         self.pass_semaphores[k] = Semaphore(self.parent)
+
+    def get_semaphores_signaled_by(self, o):
+        return [v for k, v in self.pass_semaphores.items() if k[0] == o]
+    
+    def get_semaphores_consumed_by(self, o):
+        return [v for k, v in self.pass_semaphores.items() if k[1] == o]
 
 
 class Semaphore:
@@ -52,36 +55,33 @@ class Fence:
 
 class Image:
 
-    def __init__(self, app, render_pass=None, image=None, width=None, height=None, format=None, usage=None):
+    def __init__(
+                self, app, render_pass=None, 
+                images=None, n_images=None, 
+                extent=None, width=None, height=None, 
+                format=None, usage=None
+            ):
         self.app = app
-        self._vk_image = image
-        self.render_pass = render_pass
-        self.created_image = image is None
+        self._vk_images = images
+        self.n_images = n_images or len(self._vk_images)
         self.layout = vk.VK_IMAGE_LAYOUT_UNDEFINED
-        self.width, self.height = width, height
+        self.extent = extent or Extent(width, height)
         self.format = format
         self.usage = usage
-        self.app.swapchain.objects.append(self)
-
+        # self.app.swapchain.objects.append(self)  # might not need this
+        self.create()
 
     def create(self):
-        if self.created_image:
-            # Use explicit dimensions if provided, otherwise default to swapchain resolution
-            if self.width is None:
-                self.width = self.app._vk_extent.width
-            if self.height is None:
-                self.height = self.app._vk_extent.height
+        if self._vk_images is None:
             
             self.format = self.format or self.app.surface_format
             self.usage = self.usage or (vk.VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | vk.VK_IMAGE_USAGE_SAMPLED_BIT | vk.VK_IMAGE_USAGE_STORAGE_BIT)
             
-            print(f"Creating user image: {self.width}x{self.height}")
-
-            self._vk_image = vk.vkCreateImage(
+            self._vk_images = [vk.vkCreateImage(
                 self.app._vk_device,
                 vk.VkImageCreateInfo(
                     imageType=vk.VK_IMAGE_TYPE_2D,
-                    extent=vk.VkExtent3D(width=self.width, height=self.height, depth=1),
+                    extent=vk.VkExtent3D(width=self.extent.width, height=self.extent.height, depth=1),
                     mipLevels=1,
                     arrayLayers=1,
                     format=self.format,
@@ -92,33 +92,32 @@ class Image:
                     samples=vk.VK_SAMPLE_COUNT_1_BIT,
                 ),
                 None
-            )
+            ) for _ in range(self.n_images)]
             
-            mem_req = vk.vkGetImageMemoryRequirements(self.app._vk_device, self._vk_image)
-            mem_type_index = self.app.get_memory_type_index(
-                mem_req.memoryTypeBits,
-                vk.VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT
-            )
-            self._vk_memory = vk.vkAllocateMemory(
-                self.app._vk_device,
-                vk.VkMemoryAllocateInfo(
-                    allocationSize=mem_req.size,
-                    memoryTypeIndex=mem_type_index
-                ),
-                None
-            )
-            vk.vkBindImageMemory(self.app._vk_device, self._vk_image, self._vk_memory, 0)
+            self._vk_memory = []
+            for i_image in range(self.n_images):
+                mem_req = vk.vkGetImageMemoryRequirements(self.app._vk_device, self._vk_images[i_image])
+                mem_type_index = self.app.get_memory_type_index(
+                    mem_req.memoryTypeBits,
+                    vk.VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT
+                )
+                self._vk_memory = vk.vkAllocateMemory(
+                    self.app._vk_device,
+                    vk.VkMemoryAllocateInfo(
+                        allocationSize=mem_req.size,
+                        memoryTypeIndex=mem_type_index
+                    ),
+                    None
+                )
+                vk.vkBindImageMemory(self.app._vk_device, self._vk_images[i_image], self._vk_memory, 0)
         else:
             # For swapchain images, set dimensions from swapchain extent
-            self.width = self.app._vk_extent.width
-            self.height = self.app._vk_extent.height
             self.format = self.app.surface_format
 
-
-        self._vk_image_view = vk.vkCreateImageView(
+        self._vk_image_views = [vk.vkCreateImageView(
             device=self.app._vk_device,
             pCreateInfo=vk.VkImageViewCreateInfo(
-                image=self._vk_image,
+                image=img,
                 viewType=vk.VK_IMAGE_VIEW_TYPE_2D,
                 format=self.format,
                 subresourceRange=vk.VkImageSubresourceRange(
@@ -128,43 +127,13 @@ class Image:
                 )
             ),
             pAllocator=None
-        )
-
-        if self.render_pass:
-            # Both user images and swapchain images now use scaled resolution
-            fb_width = self.width if self.created_image else self.app._vk_extent.width
-            fb_height = self.height if self.created_image else self.app._vk_extent.height
-            
-            self._vk_framebuffer = vk.vkCreateFramebuffer(
-                self.app._vk_device, 
-                vk.VkFramebufferCreateInfo(
-                    renderPass=self.render_pass._vk_render_pass,
-                    attachmentCount=1,
-                    pAttachments=[self._vk_image_view,],
-                    width=fb_width,
-                    height=fb_height,
-                    layers=1
-                ), None
-            )
-        else:
-            self._vk_framebuffer = None
+        ) for img in self._vk_images]
 
     def destroy(self):
-        if hasattr(self, '_vk_framebuffer') and self._vk_framebuffer:
-            vk.vkDestroyFramebuffer(self.app._vk_device, self._vk_framebuffer, None)
-            self._vk_framebuffer = None
-        if hasattr(self, '_vk_image_view') and self._vk_image_view:
-            vk.vkDestroyImageView(self.app._vk_device, self._vk_image_view, None)
-            self._vk_image_view = None
-        if self.created_image:
-            if hasattr(self, '_vk_image') and self._vk_image:
-                vk.vkDestroyImage(self.app._vk_device, self._vk_image, None)
-                self._vk_image = None
-            if hasattr(self, '_vk_memory') and self._vk_memory:
-                vk.vkFreeMemory(self.app._vk_device, self._vk_memory, None)
-                self._vk_memory = None
+        # TODO: Fix this later
+        pass
 
-    def transition_layout(self, command_buffer, new_layout):
+    def transition_layout(self, command_buffer, new_layout, image_i=0):
         if new_layout == self.layout:
             return
 
@@ -173,7 +142,7 @@ class Image:
             newLayout=new_layout,
             srcQueueFamilyIndex=vk.VK_QUEUE_FAMILY_IGNORED,
             dstQueueFamilyIndex=vk.VK_QUEUE_FAMILY_IGNORED,
-            image=self._vk_image,
+            image=self._vk_images[image_i],
             subresourceRange=vk.VkImageSubresourceRange(
                 aspectMask=vk.VK_IMAGE_ASPECT_COLOR_BIT,
                 baseMipLevel=0,
@@ -183,6 +152,7 @@ class Image:
             )
         )
 
+        # TODO: check this logic
         # Define source and destination stages based on layout transition
         if self.layout == vk.VK_IMAGE_LAYOUT_UNDEFINED and new_layout == vk.VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL:
             barrier.srcAccessMask = 0
@@ -227,6 +197,7 @@ class Texture:
         self.image = image
         self.storage = storage
         self.app.swapchain.objects.append(self)
+        self.create()
 
     def create(self):
         if not self.storage:
@@ -251,6 +222,59 @@ class Texture:
             self._vk_sampler = None
 
     def destroy(self):
-        if hasattr(self, '_vk_sampler') and self._vk_sampler:
-            vk.vkDestroySampler(self.app._vk_device, self._vk_sampler, None)
-            self._vk_sampler = None
+        # if hasattr(self, '_vk_sampler') and self._vk_sampler:
+        #     vk.vkDestroySampler(self.app._vk_device, self._vk_sampler, None)
+        #     self._vk_sampler = None
+        pass
+
+    def get_layout_binding(self, binding: int, stages):
+        descriptor_type = (
+            vk.VK_DESCRIPTOR_TYPE_STORAGE_IMAGE if self.storage
+            else vk.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER
+        )
+        return vk.VkDescriptorSetLayoutBinding(
+            binding=binding,
+            descriptorType=descriptor_type,
+            descriptorCount=1,
+            stageFlags=stages,
+        )
+
+    def get_write_descriptor(self, _vk_descriptor_set, i_image: int, i_binding: int):
+        image_layout = (
+            vk.VK_IMAGE_LAYOUT_GENERAL if self.storage
+            else vk.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
+        )
+        sampler = None if self.storage else self._vk_sampler
+
+        image_info = vk.VkDescriptorImageInfo(
+            sampler=sampler,
+            imageView=self.image._vk_image_views[i_image],
+            imageLayout=image_layout
+        )
+        descriptor_type = (
+            vk.VK_DESCRIPTOR_TYPE_STORAGE_IMAGE if self.storage
+            else vk.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER
+        )
+
+        write_set = vk.VkWriteDescriptorSet(
+            dstSet=_vk_descriptor_set,
+            dstBinding=i_binding,
+            dstArrayElement=0,
+            descriptorType=descriptor_type,
+            descriptorCount=1,
+            pImageInfo=image_info
+        )
+        return write_set
+
+
+class Extent:
+
+    def __init__(self, width=None, height=None, vk_extent=None):
+        self._vk_extent = vk_extent or vk.VkExtent2D(width=width, height=height)
+
+    def __getattr__(self, attr):
+        if attr == 'width':
+            return self._vk_extent.width
+        if attr == 'height':
+            return self._vk_extent.height
+        raise AttributeError(f"'{type(self).__name__}' object has no attribute '{attr}'")

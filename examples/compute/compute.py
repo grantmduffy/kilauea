@@ -1,4 +1,4 @@
-from kilauea import App, UniformBuffer, Uniform, Pass, Image, Texture, Swapchain, Drawable, Compute, ComputePass
+from kilauea import App, UniformBuffer, Uniform, Pass, Image, Texture, Swapchain, Drawable, Compute, DescriptorSet
 import numpy as np
 import glfw
 import vulkan as vk
@@ -11,7 +11,7 @@ path = Path(__file__).parent
 class MyApp(App):
 
     def __init__(self):
-        super().__init__('MyApp', n_images=10, n_frames=9)
+        super().__init__('MyApp', n_images=4, n_frames=3)
 
         triangle = 0.5 * np.array([
             [-1, -1, 0.0, 0.0],
@@ -26,38 +26,48 @@ class MyApp(App):
         self.uniforms.create()
 
         # Create images and textures
-        self.noise_image = Image(self, format=vk.VK_FORMAT_R8G8B8A8_UNORM, width=256, height=256)
+        self.noise_image = Image(self, format=vk.VK_FORMAT_R8G8B8A8_UNORM, width=256, height=256, n_images=self.swapchain.n_images)
         self.noise_texture = Texture(self, self.noise_image)
         self.storage_texture = Texture(self, self.noise_image, storage=True)
 
-        # Create compute pass and compute shader - much cleaner!
-        self.compute_pass = ComputePass(self)
+        # create descriptor sets
+        ds1 = DescriptorSet(self, n_images=self.swapchain.n_images)
+        ds1.add(self.uniforms, stages=vk.VK_SHADER_STAGE_COMPUTE_BIT)
+        ds1.add(self.storage_texture, stages=vk.VK_SHADER_STAGE_COMPUTE_BIT)
+        ds1.create()
+        ds2 = DescriptorSet(self, n_images=self.swapchain.n_images)
+        ds2.add(self.uniforms, stages=vk.VK_SHADER_STAGE_ALL_GRAPHICS)
+        ds2.add(self.noise_texture, stages=vk.VK_SHADER_STAGE_FRAGMENT_BIT)
+        ds2.create()
+        
+        # Create compute pass and compute shader
+        self.compute_pass = Pass(self, wait_for=[self.swapchain], compute=True)
         self.noise_compute = Compute(
             self, path / 'noise.comp',
-            uniforms=self.uniforms,
-            storage_images=[self.storage_texture]
+            descriptor_sets=[ds1]
         )
 
-        # Create graphics pass and drawable - also much cleaner!
-        self.pass1 = Pass(self, clear_color=(0, 0, 0, 0))
+        # Create graphics pass and drawable
+        self.pass1 = Pass(self, clear_color=(0, 0, 0, 0), wait_for=[self.compute_pass])
         self.mesh1 = Drawable(
             self, triangle, 
             path / 'triangle.vert', path / 'triangle.frag', 
             self.pass1, 
             vertex_attributes=['vec2', 'vec2'],
-            uniforms=self.uniforms,
-            textures=[self.noise_texture]
+            descriptor_sets=[ds2]
         )
+        self.swapchain.present_wait_for([self.pass1])
         
         self.last_time = glfw.get_time()
         self.last_count = 0
         self.fps_interval = 0.2
 
-    def draw(self, command_buffer, swapchain_image):
-        with self.compute_pass.start(command_buffer, self.noise_image) as pass_ctx:
-            self.noise_compute.dispatch(command_buffer, 256//8, 256//8, 1)
-        with self.pass1.start(command_buffer, swapchain_image) as pass_ctx:
-            self.mesh1.draw(command_buffer, 0)
+    def draw(self, image_i):
+        # TODO maybe have PassContext.__enter__ setup a global current_command_buffer that .dispatch and .draw can use? 
+        with self.compute_pass.start(image_i, self.noise_image) as pass_ctx:
+            self.noise_compute.dispatch(pass_ctx, 256//8, 256//8, 1)
+        with self.pass1.start(image_i, self.swapchain.images) as pass_ctx:
+            self.mesh1.draw(pass_ctx)
         
     def main_loop(self):
         # handle user input, update uniforms, etc.

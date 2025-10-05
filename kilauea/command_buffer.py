@@ -24,5 +24,5 @@ class CommandBuffer:
         )
         vk.vkBeginCommandBuffer(self._vk_command_buffer, info)
 
-    def __exit__(self, exc_type, exc_value, traceback):
+    def __exit__(self, exc_type=None, exc_value=None, traceback=None):
         vk.vkEndCommandBuffer(self._vk_command_buffer)

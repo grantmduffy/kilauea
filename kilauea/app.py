@@ -31,11 +31,12 @@ class App:
         self.color_space = color_space
         self.size = size
         self.framebuffer_resized = False
+        self.passes = []
 
         self.init_vk()
         self.create_descriptor_pool()  # Create descriptor pool for uniform buffers
         self.swapchain = Swapchain(self, n_images)
-        self.swapchain.create()
+        self.swapchain.create(*self.size)
         self.frames = tuple(Frame(self) for _ in range(n_frames))
         
     def initialize_objects(self):
@@ -987,9 +988,8 @@ class App:
         pass
 
     def record_draw_commands(self):
-        for image, command_buffer in self.swapchain.get_images():
-            with command_buffer:
-                self.draw(command_buffer, image)
+        for image_i in range(self.swapchain.n_images):
+            self.draw(image_i)
 
     def draw(self, command_buffer, image):
         raise NotImplementedError()
@@ -997,44 +997,28 @@ class App:
     def graphics_loop(self):
         while self.running:
             frame = self.get_next_frame()
-
-            try:
-                image, command_buffer = self.swapchain.get_next_image(frame)
-            except (vk.VkError, vk.VkSuboptimalKhr) as e:
-                is_out_of_date = isinstance(e, vk.VkSuboptimalKhr) or \
-                                 (hasattr(e, 'args') and len(e.args) > 0 and e.args[0] == vk.VK_ERROR_OUT_OF_DATE_KHR)
-                if is_out_of_date:
-                    self.recreate_swapchain()
-                    continue
-                else:
-                    raise e
-
-            self.submit_commands(command_buffer, frame)
-
-            present_failed = False
-            try:
-                self.swapchain.present_image(image, frame.render_finished_semaphore)
-            except (vk.VkError, vk.VkSuboptimalKhr) as e:
-                is_out_of_date = isinstance(e, vk.VkSuboptimalKhr) or \
-                                 (hasattr(e, 'args') and len(e.args) > 0 and e.args[0] in [vk.VK_ERROR_OUT_OF_DATE_KHR, vk.VK_SUBOPTIMAL_KHR])
-                if is_out_of_date:
-                    present_failed = True
-                else:
-                    raise e
-            
-            if present_failed or self.framebuffer_resized:
-                self.framebuffer_resized = False
-                self.recreate_swapchain()
-
+            image_i = self.swapchain.get_next_image(frame)  # signals image available semaphore
+            self.submit_commands(image_i, frame)
+            # semaphores consumed by the swapchain are used to block presentation
+            presentation_semaphores = frame.get_semaphores_consumed_by(self.swapchain)
+            self.swapchain.present_image(image_i, presentation_semaphores)
             self.frame_count += 1
     
-    def submit_commands(self, command_buffer, frame):
-        vk.vkQueueSubmit(self._vk_queue, 1, vk.VkSubmitInfo(
-                waitSemaphoreCount=1, pWaitSemaphores=[frame.image_available_semaphore._vk_semaphore],
-                pWaitDstStageMask=[vk.VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,],
+    def submit_commands(self, image_i, frame):
+        # gather command buffers from passes, figure out which semaphores to signal
+        infos = []
+        for p in self.passes:
+            wait_semaphores = frame.get_semaphores_consumed_by(p)
+            wait_semaphores = wait_semaphores if len(wait_semaphores) > 0 else [frame.image_available_semaphore]
+            signal_semaphores = frame.get_semaphores_signaled_by(p)
+            command_buffer = p.command_buffers[image_i]
+            infos.append(vk.VkSubmitInfo(
+                waitSemaphoreCount=len(wait_semaphores), pWaitSemaphores=[x._vk_semaphore for x in wait_semaphores],
+                pWaitDstStageMask=p.wait_dist_stage,
                 commandBufferCount=1, pCommandBuffers=[command_buffer._vk_command_buffer],
-                signalSemaphoreCount=1, pSignalSemaphores=[frame.render_finished_semaphore._vk_semaphore]
-            ), fence=frame.fence._vk_fence)
+                signalSemaphoreCount=len(signal_semaphores), pSignalSemaphores=[x._vk_semaphore for x in signal_semaphores]
+            ))
+        vk.vkQueueSubmit(self._vk_queue, len(infos), infos, fence=frame.fence._vk_fence)
 
     def run(self):
         # Initialize all registered objects after user's __init__ is complete
@@ -1065,47 +1049,32 @@ class App:
         self.framebuffer_resized = True
 
     def recreate_swapchain(self):
+
+        # get new size
         w, h = glfw.get_framebuffer_size(self.window)
         while w == 0 or h == 0:
             w, h = glfw.get_framebuffer_size(self.window)
             glfw.wait_events()
-
         vk.vkDeviceWaitIdle(self._vk_device)
 
+        # TODO: update
         self.cleanup_swapchain()
 
         # Recreate semaphores for all frames to avoid validation errors
+        # TODO: update
         for frame in self.frames:
             frame.recreate_sync_objects()
 
-        self.supported_surface_capabilities = vk.vkGetInstanceProcAddr(
-            self._vk_instance, 'vkGetPhysicalDeviceSurfaceCapabilitiesKHR'
-        )(self._vk_physical_device, self._vk_surface, None)
-
-        # Update swapchain extent to match new window size
-        if self.supported_surface_capabilities.currentExtent.width != 0xFFFFFFFF:
-            self._vk_extent = self.supported_surface_capabilities.currentExtent
-        else:
-            self._vk_extent = vk.VkExtent2D(
-                width=max(min(w, self.supported_surface_capabilities.maxImageExtent.width), self.supported_surface_capabilities.minImageExtent.width), 
-                height=max(min(h, self.supported_surface_capabilities.maxImageExtent.height), self.supported_surface_capabilities.minImageExtent.height)
-            )
-        
-        self._vk_viewport.width = self._vk_extent.width
-        self._vk_viewport.height = self._vk_extent.height
-
         print("\n--- RECREATE SWAPCHAIN ---")
         print(f"Framebuffer size: ({w}, {h})")
-        print(f"New Swapchain Extent: ({self._vk_extent.width}, {self._vk_extent.height})")
-        print(f"New Viewport: (x={self._vk_viewport.x}, y={self._vk_viewport.y}, w={self._vk_viewport.width}, h={self._vk_viewport.height})")
-
-        self.create_swapchain()
+        
+        self.create_swapchain(w, h)
         self.record_draw_commands()
 
     def cleanup_swapchain(self):
         # raise NotImplementedError()
         self.swapchain.destroy()
 
-    def create_swapchain(self):
+    def create_swapchain(self, w, h):
         # raise NotImplementedError()
-        self.swapchain.create()
+        self.swapchain.create(w, h)

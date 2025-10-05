@@ -133,69 +133,105 @@ class UniformBuffer:
         """Calculate the next aligned offset"""
         return ((offset + alignment - 1) // alignment) * alignment
     
-    def create_descriptor_set_layout(self):
-        """Create descriptor set layout for this uniform buffer"""
-        bindings = [
-            vk.VkDescriptorSetLayoutBinding(
-                binding=0,
-                descriptorType=vk.VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
-                descriptorCount=1,
-                # TODO: automatically determine stages
-                stageFlags=vk.VK_SHADER_STAGE_VERTEX_BIT | vk.VK_SHADER_STAGE_FRAGMENT_BIT, 
-                pImmutableSamplers=None
-            )
-        ]
-        
-        self.descriptor_set_layout = vk.vkCreateDescriptorSetLayout(
-            self.app._vk_device,
-            vk.VkDescriptorSetLayoutCreateInfo(
-                sType=vk.VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
-                bindingCount=len(bindings),
-                pBindings=bindings
-            ),
-            None
+    # def get_descriptor_set(self, n_):
+    #     binding = vk.VkDescriptorSetLayoutBinding(
+    #         binding=0,
+    #         descriptorType=vk.VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+    #         descriptorCount=1,
+    #         # TODO: automatically determine stages
+    #         stageFlags=vk.VK_SHADER_STAGE_VERTEX_BIT | vk.VK_SHADER_STAGE_FRAGMENT_BIT, 
+    #         pImmutableSamplers=None
+    #     )
+    #     return binding, layout
+
+    def get_layout_binding(self, binding: int, stages):
+        return vk.VkDescriptorSetLayoutBinding(
+            binding=binding,
+            descriptorType=vk.VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+            descriptorCount=1,
+            stageFlags=stages,
         )
-        return self.descriptor_set_layout
-    
-    def create_descriptor_set(self, descriptor_pool):
-        """Create descriptor sets for each frame in flight"""
-        if not hasattr(self, 'descriptor_set_layout'):
-            raise RuntimeError("Must create descriptor set layout first")
-        
-        self.descriptor_set = vk.vkAllocateDescriptorSets(
-            self.app._vk_device,
-            vk.VkDescriptorSetAllocateInfo(
-                sType=vk.VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
-                descriptorPool=descriptor_pool,
-                descriptorSetCount=1,
-                pSetLayouts=[self.descriptor_set_layout]
-            )
-        )[0]
-        
+
+    def get_write_descriptor(self, _vk_descriptor_set, i_image: int, i_binding: int):
         buffer_info = vk.VkDescriptorBufferInfo(
             buffer=self._vk_buffer,
             offset=0,
             range=self.total_size
         )
-        
-        write_descriptor_set = vk.VkWriteDescriptorSet(
-            sType=vk.VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-            dstSet=self.descriptor_set,
-            dstBinding=0,
+        write_set = vk.VkWriteDescriptorSet(
+            dstSet=_vk_descriptor_set,
+            dstBinding=i_binding,
             dstArrayElement=0,
             descriptorType=vk.VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
             descriptorCount=1,
             pBufferInfo=buffer_info
         )
+        return write_set
+
+
+    # def create_descriptor_set_layout(self):
+    #     """Create descriptor set layout for this uniform buffer"""
+    #     bindings = [
+    #         vk.VkDescriptorSetLayoutBinding(
+    #             binding=0,
+    #             descriptorType=vk.VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+    #             descriptorCount=1,
+    #             # TODO: automatically determine stages
+    #             stageFlags=vk.VK_SHADER_STAGE_VERTEX_BIT | vk.VK_SHADER_STAGE_FRAGMENT_BIT, 
+    #             pImmutableSamplers=None
+    #         )
+    #     ]
         
-        vk.vkUpdateDescriptorSets(
-            self.app._vk_device,
-            descriptorWriteCount=1,
-            pDescriptorWrites=[write_descriptor_set],
-            descriptorCopyCount=0,
-            pDescriptorCopies=None
-        )
-        return self.descriptor_set
+    #     self.descriptor_set_layout = vk.vkCreateDescriptorSetLayout(
+    #         self.app._vk_device,
+    #         vk.VkDescriptorSetLayoutCreateInfo(
+    #             sType=vk.VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
+    #             bindingCount=len(bindings),
+    #             pBindings=bindings
+    #         ),
+    #         None
+    #     )
+    #     return self.descriptor_set_layout
+    
+    # def create_descriptor_set(self, descriptor_pool):
+    #     """Create descriptor sets for each frame in flight"""
+    #     if not hasattr(self, 'descriptor_set_layout'):
+    #         raise RuntimeError("Must create descriptor set layout first")
+        
+    #     self.descriptor_set = vk.vkAllocateDescriptorSets(
+    #         self.app._vk_device,
+    #         vk.VkDescriptorSetAllocateInfo(
+    #             sType=vk.VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
+    #             descriptorPool=descriptor_pool,
+    #             descriptorSetCount=1,
+    #             pSetLayouts=[self.descriptor_set_layout]
+    #         )
+    #     )[0]
+        
+    #     buffer_info = vk.VkDescriptorBufferInfo(
+    #         buffer=self._vk_buffer,
+    #         offset=0,
+    #         range=self.total_size
+    #     )
+        
+    #     write_descriptor_set = vk.VkWriteDescriptorSet(
+    #         sType=vk.VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+    #         dstSet=self.descriptor_set,
+    #         dstBinding=0,
+    #         dstArrayElement=0,
+    #         descriptorType=vk.VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+    #         descriptorCount=1,
+    #         pBufferInfo=buffer_info
+    #     )
+        
+    #     vk.vkUpdateDescriptorSets(
+    #         self.app._vk_device,
+    #         descriptorWriteCount=1,
+    #         pDescriptorWrites=[write_descriptor_set],
+    #         descriptorCopyCount=0,
+    #         pDescriptorCopies=None
+    #     )
+    #     return self.descriptor_set
 
     def create(self):
         """Create the Vulkan buffer and map all uniforms to it"""
@@ -256,15 +292,9 @@ class UniformBuffer:
             memory_req.size, 0
         )
         
-        # Create descriptor set layout first (needed for pipeline creation)
-        self.create_descriptor_set_layout()
-        
         # Map each uniform to its location in the buffer
         for name, uniform in self.uniforms.items():
             uniform.map_to_location(self.mapped_memory, uniform.offset)
-        
-        # Create descriptor sets after buffer is ready
-        self.create_descriptor_set(self.app._vk_descriptor_pool)
         
         print(f"UniformBuffer created: {self.total_size} bytes, {len(self.uniforms)} uniforms")
         for name, uniform in self.uniforms.items():
