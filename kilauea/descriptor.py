@@ -11,7 +11,7 @@ class DescriptorSet:
         self._vk_layouts = []
         self._vk_descriptor_sets = []
 
-    def add(self, item: Texture | UniformBuffer, stages=vk.VK_SHADER_STAGE_COMPUTE_BIT):
+    def add(self, item, stages=vk.VK_SHADER_STAGE_COMPUTE_BIT):
         binding = len(self.objects)
         self._vk_layouts.append(item.get_layout_binding(binding, stages))
         self.objects.append(item)
