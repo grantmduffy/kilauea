@@ -1012,9 +1012,13 @@ class App:
             wait_semaphores = wait_semaphores if len(wait_semaphores) > 0 else [frame.image_available_semaphore]
             signal_semaphores = frame.get_semaphores_signaled_by(p)
             command_buffer = p.command_buffers[image_i]
+            # Create wait stage masks array
+
+            # TODO: maybe specify the wait stage in the semaphore instead of in the pass? That way we can be more specific?
+            wait_dst_stage_mask = [p.wait_dist_stage for _ in wait_semaphores] if p.wait_dist_stage is not None else [vk.VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT for _ in wait_semaphores]
             infos.append(vk.VkSubmitInfo(
                 waitSemaphoreCount=len(wait_semaphores), pWaitSemaphores=[x._vk_semaphore for x in wait_semaphores],
-                pWaitDstStageMask=p.wait_dist_stage,
+                pWaitDstStageMask=wait_dst_stage_mask,
                 commandBufferCount=1, pCommandBuffers=[command_buffer._vk_command_buffer],
                 signalSemaphoreCount=len(signal_semaphores), pSignalSemaphores=[x._vk_semaphore for x in signal_semaphores]
             ))

@@ -15,7 +15,6 @@ class Swapchain:
         self.objects = []
         self.composite_alpha = composite_alpha
         self.wait_for = wait_for or []
-        self.extent = extent or Extent()
 
         
     def get_next_image(self, frame, timeout=1000000000):
@@ -58,7 +57,6 @@ class Swapchain:
                 width=max(min(width, supported_surface_capabilities.maxImageExtent.width), supported_surface_capabilities.minImageExtent.width), 
                 height=max(min(height, supported_surface_capabilities.maxImageExtent.height), supported_surface_capabilities.minImageExtent.height)
             )
-        self.extent._vk_extent = new_extent
 
         # First create the Vulkan swapchain
         supported_present_modes = vk.vkGetInstanceProcAddr(
@@ -79,7 +77,7 @@ class Swapchain:
             queue_family_index_count = 2
             queue_family_indices = [self.app.graphics_queue_family_i, self.app.present_queue_family_i]
         # Use the window extent for swapchain image creation
-        print(f"Creating swapchain with extent: {self.extent.width}x{self.extent.height}")
+        print(f"Creating swapchain with extent: {new_extent.width}x{new_extent.height}")
         
         self._vk_swapchain = vk.vkGetDeviceProcAddr(self.app._vk_device, 'vkCreateSwapchainKHR')(self.app._vk_device, vk.VkSwapchainCreateInfoKHR(
             surface=self.app._vk_surface,
@@ -103,7 +101,8 @@ class Swapchain:
         self.objects.pop()  # remove the pass so it's not recreated with other objects
         self.swapchain_render_pass.create()
         self.images = Image(
-            self.app, 
+            self.app,
+            width=new_extent.width, height=new_extent.height,
             render_pass=self.swapchain_render_pass, 
             images=vk.vkGetDeviceProcAddr(
                 self.app._vk_device, 'vkGetSwapchainImagesKHR'

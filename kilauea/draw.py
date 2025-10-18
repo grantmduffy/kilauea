@@ -102,20 +102,20 @@ class PassContext:
 
             render_extent = self.target_images.extent
             framebuffer = vk.vkCreateFramebuffer(
-                self.render_pass.app._vk_device, 
+                self.render_pass.app._vk_device,
                 vk.VkFramebufferCreateInfo(
                     renderPass=self.render_pass._vk_render_pass,
-                    attachmentCount=self.target_images.n_images,
-                    pAttachments=self.target_images._vk_image_views,
-                    width=self.target_images.extent.width,
-                    height=self.target_images.extent.height,
+                    attachmentCount=1,
+                    pAttachments=[self.target_images._vk_image_views[self.image_i]],
+                    width=render_extent.width,
+                    height=render_extent.height,
                     layers=1
                 ), None
             )
             vk.vkCmdBeginRenderPass(
                 self.command_buffer._vk_command_buffer, vk.VkRenderPassBeginInfo(
-                    renderPass=self.render_pass._vk_render_pass, framebuffer=framebuffer, 
-                    renderArea=vk.VkRect2D(offset=[0, 0], extent=render_extent._vk_extent), 
+                    renderPass=self.render_pass._vk_render_pass, framebuffer=framebuffer,
+                    renderArea=vk.VkRect2D(offset=[0, 0], extent=render_extent._vk_extent),
                     clearValueCount=clear_value_count, pClearValues=clear_values
                 ),
                 getattr(vk, f'VK_SUBPASS_CONTENTS_INLINE')
