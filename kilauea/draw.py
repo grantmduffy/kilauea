@@ -139,18 +139,31 @@ class  Drawable:
         'vec3': (vk.VK_FORMAT_R32G32B32_SFLOAT, 12),
         'vec4': (vk.VK_FORMAT_R32G32B32A32_SFLOAT, 16),
     }
-    
+
+    TOPOLOGY_MAP = {
+        'triangle_list': vk.VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST,
+        'triangle_strip': vk.VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP,
+    }
+
+    CULL_MAP = {
+        'none': vk.VK_CULL_MODE_NONE,
+        'front': vk.VK_CULL_MODE_FRONT_BIT,
+        'back': vk.VK_CULL_MODE_BACK_BIT,
+    }
+
     def __init__(self, app, vertices: np.ndarray, vertex_shader: Shader | str | Path, fragment_shader: Shader | str,
-                 render_pass, indices: np.ndarray=None, targets=None, vertex_attributes=None, descriptor_sets=None):
+                 render_pass, indices: np.ndarray=None, targets=None, vertex_attributes=None, descriptor_sets=None, topology='triangle_list', cull_mode='back'):
         self.app = app
         self.vertices = Buffer(app, vertices)
-        self.indices = Buffer(indices) if indices is not None else None
+        self.indices = Buffer(app, indices, usage='index') if indices is not None else None
         self.vertex_shader = Shader(app, vertex_shader, 'vertex') if not isinstance(vertex_shader, Shader) else vertex_shader
         self.fragment_shader = Shader(app, fragment_shader, 'fragment') if not isinstance(fragment_shader, Shader) else fragment_shader
         self.targets = targets
         self.vertex_attributes = vertex_attributes or []
         self.render_pass = render_pass
         self.descriptor_sets = descriptor_sets or []
+        self.topology = self.TOPOLOGY_MAP.get(topology.lower(), vk.VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST)
+        self.cull_mode = self.CULL_MAP.get(cull_mode.lower(), vk.VK_CULL_MODE_BACK_BIT)
         self.app.swapchain.objects.append(self)
 
     def create(self):
@@ -181,10 +194,9 @@ class  Drawable:
             vertexAttributeDescriptionCount=len(attribute_descriptions), pVertexAttributeDescriptions=attribute_descriptions
         )
 
-        # TODO: make this dynamic to different topologies
         input_assembly_ci = vk.VkPipelineInputAssemblyStateCreateInfo(
             sType=vk.VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO,
-            topology=vk.VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST,
+            topology=self.topology,
             primitiveRestartEnable=vk.VK_FALSE
         )
 
@@ -212,7 +224,7 @@ class  Drawable:
             rasterizerDiscardEnable=vk.VK_FALSE,
             polygonMode=vk.VK_POLYGON_MODE_FILL,
             lineWidth=1.0,
-            cullMode=vk.VK_CULL_MODE_BACK_BIT,
+            cullMode=self.cull_mode,
             frontFace=vk.VK_FRONT_FACE_CLOCKWISE
         )
 
@@ -348,7 +360,11 @@ class  Drawable:
         DescriptorSet.bind(self._vk_pipeline_layout, command_buffer, self.descriptor_sets, pass_context.image_i)
 
         vk.vkCmdBindVertexBuffers(command_buffer._vk_command_buffer, 0, 1, [self.vertices._vk_buffer], [0])
-        vk.vkCmdDraw(command_buffer._vk_command_buffer, len(self.vertices.data), 1, 0, 0)
+        if self.indices is not None:
+            vk.vkCmdBindIndexBuffer(command_buffer._vk_command_buffer, self.indices._vk_buffer, 0, vk.VK_INDEX_TYPE_UINT32)
+            vk.vkCmdDrawIndexed(command_buffer._vk_command_buffer, len(self.indices.data), 1, 0, 0, 0)
+        else:
+            vk.vkCmdDraw(command_buffer._vk_command_buffer, len(self.vertices.data), 1, 0, 0)
 
 
 class Compute:
