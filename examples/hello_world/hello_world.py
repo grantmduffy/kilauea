@@ -1,4 +1,11 @@
-from kilauea import App, UniformBuffer, Uniform, Pass, Image, Texture, Swapchain, Drawable
+# To run this example, you must first install kilauea in editable mode
+# from the root directory of the project (the one containing setup.py):
+# pip install -e .
+#
+# Then, you can run this script from the same root directory using:
+# python -m kilauea.examples.hello_world.hello_world
+
+from kilauea.kilauea import App, UniformBuffer, Uniform, Pass, Drawable, DescriptorSet
 import numpy as np
 import glfw
 import vulkan as vk
@@ -11,7 +18,7 @@ path = Path(__file__).parent
 class MyApp(App):
 
     def __init__(self):
-        super().__init__('MyApp', n_images=10, n_frames=9)
+        super().__init__('Hello World Example', n_images=10, n_frames=9)
 
         triangle = 0.5 * np.array([
             [-1, -1, 1.0, 0.0, 0.0],
@@ -25,34 +32,28 @@ class MyApp(App):
         self.uniforms['time'] = Uniform(np.array([0.0], dtype=np.float32), glsl_type='float')
         self.uniforms.create()
 
+        # Create a descriptor set and add the uniform buffer to it
+        self.descriptor_set = DescriptorSet(self, n_images=self.swapchain.n_images)
+        self.descriptor_set.add(self.uniforms, stages=vk.VK_SHADER_STAGE_VERTEX_BIT)
+        self.descriptor_set.create()
+
         self.pass1 = Pass(self, clear_color=(0, 0, 0, 0))
         self.mesh1 = Drawable(
-            self, triangle, 
-            path / 'triangle.vert', path / 'triangle.frag', 
-            self.pass1, 
+            self, triangle,
+            vertex_shader=path / 'triangle.vert',
+            fragment_shader=path / 'triangle.frag',
+            render_pass=self.pass1,
             vertex_attributes=['vec2', 'vec3'],
-            uniforms=self.uniforms
+            descriptor_sets=[self.descriptor_set]
         )
         
         self.last_time = glfw.get_time()
         self.last_count = 0
         self.fps_interval = 0.2
 
-    def draw(self, command_buffer, swapchain_image):
-        with self.pass1.start(command_buffer, swapchain_image) as pass_ctx:
-            # Set viewport and scissor for the render pass
-            viewport = vk.VkViewport(
-                x=0, y=0, 
-                width=float(pass_ctx.render_extent.width), 
-                height=float(pass_ctx.render_extent.height),
-                minDepth=0.0, maxDepth=1.0
-            )
-            scissor = vk.VkRect2D(offset=[0, 0], extent=pass_ctx.render_extent)
-            
-            vk.vkCmdSetViewport(command_buffer._vk_command_buffer, 0, 1, [viewport])
-            vk.vkCmdSetScissor(command_buffer._vk_command_buffer, 0, 1, [scissor])
-            
-            self.mesh1.draw(command_buffer, 0)
+    def draw(self, image_i):
+        with self.pass1.start(image_i, self.swapchain.images) as pass_ctx:
+            self.mesh1.draw(pass_ctx)
         
     def main_loop(self):
         # handle user input, update uniforms, etc.

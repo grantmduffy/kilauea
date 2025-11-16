@@ -7,4 +7,10 @@ setup(
     author_email='grantmduffy@gmail.com',
     description='The pythonic vulkan render engine.',
     packages=find_packages(),
+    install_requires=[
+        'vulkan',
+        'numpy',
+        'glfw',
+        'PyGLM',
+    ],
 )
