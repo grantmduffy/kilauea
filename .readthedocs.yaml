@@ -1,0 +1,17 @@
+# Read the Docs configuration file
+# See https://docs.readthedocs.io/en/stable/config-file/v2.html for details
+
+# Required
+version: 0.1.0
+
+# Set the OS, Python version, and other tools you might need
+build:
+  os: Windows
+  tools:
+    python: "3.12.12"
+
+# Build documentation in the "docs/" directory with Sphinx
+sphinx:
+   configuration: docs/conf.py
+
+        
