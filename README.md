@@ -12,6 +12,14 @@ Furthermore, Kilauea integrates seamlessly with optimized third-party libraries 
 
 The result is a library that enables high-performance graphics projects in a very pythonic and approachable way. You get the best of both worlds: the development speed of Python and the rendering performance of a low-level API like Vulkan.
 
+## Prerequisites
+
+Before using Kilauea, you'll need to install the **Vulkan SDK** on your system:
+
+- On Linux: Install the official Vulkan SDK from [LunarG](https://vulkan.lunarG.com/sdk/home).
+- On Windows: Download and install from Microsoft Store or the Vulkan SDK website.
+- On macOS: Vulkan is available through [MoltenVK](https://github.com/KhronosGroup/MoltenVK).
+
 ## Getting Started
 
 Getting started with Kilauea is simple.
@@ -26,7 +34,11 @@ pip install -e .
 
 This will install all the necessary dependencies, including `vulkan`, `numpy`, `glfw`, and `PyGLM`.
 
-### 2. Your First Triangle
+### 2. Documentation
+
+For comprehensive API documentation, see the [docs](docs/_build/html/index.html) directory or open `docs/_build/html/index.html` in your browser.
+
+### 3. Your First Triangle
 
 The best way to start is by looking at the `hello_world` example. You can run it from the project's root directory:
 

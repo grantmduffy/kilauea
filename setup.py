@@ -12,5 +12,6 @@ setup(
         'numpy',
         'glfw',
         'PyGLM',
+        'sphinx'
     ],
 )

@@ -1,2 +1,8 @@
 *.egg-info
 *__pycache__
+*.pyc
+*.pyo
+*.pyd
+*_build
+*_static
+*_templates

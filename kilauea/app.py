@@ -9,13 +9,15 @@ import tempfile
 
 
 class App:
+    """The main application class for Kilauea."""
 
     def __init__(
-                self, title='Kilauea', size=(640, 480), n_frames=3, n_images=4, version=(1, 3, 0), 
+                self, title='Kilauea', size=(640, 480), n_frames=3, n_images=4, version=(1, 3, 0),
                 engine_name='Kilauea', device_preference=['discrete_gpu', 'integrated_gpu', 'virtual_gpu', 'cpu'],
                 surface_format=vk.VK_FORMAT_B8G8R8A8_UNORM, color_space=vk.VK_COLOR_SPACE_SRGB_NONLINEAR_KHR
 
             ):
+        """Initialize the Kilauea application."""
         glfw.init()
         glfw.window_hint(glfw.CLIENT_API, glfw.NO_API)
         glfw.window_hint(glfw.RESIZABLE, glfw.TRUE)
@@ -992,6 +994,7 @@ class App:
             self.draw(image_i)
 
     def draw(self, command_buffer, image):
+        """Must be implemented by subclasses to define rendering operations."""
         raise NotImplementedError()
 
     def graphics_loop(self):
@@ -1025,6 +1028,7 @@ class App:
         vk.vkQueueSubmit(self._vk_queue, len(infos), infos, fence=frame.fence._vk_fence)
 
     def run(self):
+        """Starts the main application loop. This method will block until the application is closed."""
         # Initialize all registered objects after user's __init__ is complete
         self.initialize_objects()
 
